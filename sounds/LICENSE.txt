@@ -1,0 +1,7 @@
+Sound effects by Kenney (www.kenney.nl) — CC0 1.0 (public domain)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+collision_0..4.mp3  <- Impact Sounds: impactSoft_medium_000..004.ogg
+merge.mp3           <- Interface Sounds: maximize_006.ogg
+gameover.mp3        <- Music Jingles: jingles_PIZZI01.ogg
+(converted from the original .ogg files to .mp3)

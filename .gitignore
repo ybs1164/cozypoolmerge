@@ -1,0 +1,16 @@
+node_modules/
+www/
+.claude/
+.idea/
+.vscode/
+.env
+.env.*
+*.log
+*.jks
+*.keystore
+*.p12
+*.pem
+keystore.properties
+local.properties
+**/build/
+**/.gradle/

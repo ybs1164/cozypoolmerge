@@ -1,0 +1,2888 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<title>Cozy Pool Merge</title>
+<link rel="icon" type="image/png" href="images/icon.png" />
+<link rel="apple-touch-icon" href="images/icon.png" />
+<script src="https://sdk.crazygames.com/crazygames-sdk-v3.js"></script>
+<style>
+  :root{
+    color-scheme: dark;
+  }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:#eaf7fb;
+    overflow:hidden;
+    /* Mobile: no text selection, long-press callouts, tap flashes or
+       pinch/double-tap zoom anywhere (iOS ignores user-scalable=no). */
+    -webkit-user-select:none; -moz-user-select:none; -ms-user-select:none; user-select:none;
+    -webkit-touch-callout:none;
+    -webkit-tap-highlight-color:transparent;
+    touch-action:none;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  #stage{
+    position:fixed; inset:0;
+    display:block;
+    touch-action:none;
+    -webkit-user-select:none; user-select:none;
+    cursor:pointer;
+    background:radial-gradient(ellipse at center, #f2fdff 0%, #cdeef7 100%);
+  }
+
+  /* =========================================================================
+     Side panels (DOM, sit above the canvas): score/leaderboard on the left,
+     "next tube" preview on the right. Purely informational — pointer-events
+     are disabled so aiming/shooting on the canvas underneath still works.
+     ========================================================================= */
+  .side-panel{
+    position:fixed;
+    top:50%;
+    transform:translateY(-50%);
+    width:190px;
+    box-sizing:border-box;
+    padding:18px 16px;
+    border-radius:20px;
+    background:rgba(255,255,255,0.88);
+    border:1px solid rgba(255,255,255,0.9);
+    box-shadow:0 8px 24px rgba(20,90,120,0.18);
+    color:#0b4a63;
+    z-index:5;
+    -webkit-backdrop-filter:blur(6px);
+    backdrop-filter:blur(6px);
+    pointer-events:none;
+  }
+  #leftPanel{ left:max(16px, env(safe-area-inset-left)); }
+  #rightPanel{ right:max(16px, env(safe-area-inset-right)); text-align:center; }
+
+  .panel-title{
+    font-size:13px;
+    font-weight:800;
+    letter-spacing:1px;
+    color:#0f8fc4;
+    margin:0 0 8px;
+    text-transform:uppercase;
+  }
+  #scoreValue{
+    font-size:30px;
+    font-weight:800;
+    color:#0b4a63;
+    margin:0 0 18px;
+    transform:scale(1);
+  }
+  @keyframes scoreBump{ 0%{ transform:scale(1); } 50%{ transform:scale(1.2); } 100%{ transform:scale(1); } }
+  #scoreValue.bump{ animation:scoreBump 0.2s ease; }
+
+  .leaderboard-list{
+    list-style:none;
+    margin:0 0 20px;
+    padding:0;
+    display:flex; flex-direction:column; gap:6px;
+    font-size:14px;
+    font-weight:700;
+    max-height:260px;
+    overflow-y:auto;
+  }
+  .leaderboard-list li{
+    display:flex; justify-content:space-between;
+    padding:7px 10px;
+    border-radius:10px;
+  }
+  #leaderboardList li{ background:rgba(51,204,255,0.14); }
+  #leaderboardList li.empty{ justify-content:center; color:rgba(11,74,99,0.5); font-weight:500; }
+  #leaderboardListModal li{ background:rgba(255,255,255,0.08); color:#eaf6fb; }
+  #leaderboardListModal li.empty{ justify-content:center; color:rgba(234,246,251,0.55); font-weight:500; }
+
+  .leaderboard-btn{
+    display:none;
+    pointer-events:auto;
+    border:none;
+    border-radius:10px;
+    padding:7px 12px;
+    font-size:12px;
+    font-weight:700;
+    background:rgba(51,204,255,0.22);
+    color:#0b4a63;
+    cursor:pointer;
+    font-family:inherit;
+  }
+
+  #nextPreviewWrap{
+    width:110px; height:110px;
+    border-radius:50%;
+    margin:0 auto;
+    display:flex; align-items:center; justify-content:center;
+    background:rgba(51,204,255,0.16);
+    transition:background-color .2s ease;
+  }
+  #nextPreviewImg{
+    width:86px; height:86px;
+    object-fit:contain;
+  }
+
+  /* -------------------------------------------------------------------
+     "Top" layout: toggled by JS (body.layout-top, see layoutMode in the
+     script) when the window is tall/narrow enough that the normal side
+     panels would overlap the square pool. The pool itself gets pushed
+     down (see resize()) and score/next move into the freed-up top strip;
+     the leaderboard collapses into a button that opens a popup instead
+     of staying inline (there's no room for a list up there).
+     ------------------------------------------------------------------- */
+  body.layout-top #leftPanel{
+    top:max(8px, env(safe-area-inset-top));
+    left:max(8px, env(safe-area-inset-left));
+    transform:none;
+    width:auto;
+    min-width:128px;
+    padding:10px 14px;
+  }
+  body.layout-top #rightPanel{
+    top:max(8px, env(safe-area-inset-top));
+    right:calc(max(16px, env(safe-area-inset-right)) + 52px);
+    transform:none;
+    width:auto;
+    padding:8px 12px;
+  }
+  /* Keep room beside the next-preview panel for the top-right settings gear. */
+  body.layout-top .panel-title{ margin-bottom:4px; }
+  body.layout-top #scoreValue{ margin-bottom:8px; font-size:24px; }
+  body.layout-top #leaderboardTitle,
+  body.layout-top #leaderboardList{ display:none; }
+  body.layout-top .leaderboard-btn{ display:inline-block; }
+  body.layout-top #nextPreviewWrap{ width:64px; height:64px; }
+  body.layout-top #nextPreviewImg{ width:50px; height:50px; }
+
+  /* Dim the DOM side panels + in-game settings gear along with the canvas
+     when the run ends, so the whole screen (not just the pool) goes dark. */
+  body.game-over #leftPanel,
+  body.game-over #rightPanel,
+  body.game-over #btnInGameSettings{
+    filter:brightness(0.35);
+    transition:filter .2s ease;
+  }
+
+  /* =========================================================================
+     Main menu / settings overlay UI (DOM, sits above the canvas)
+     ========================================================================= */
+  .hidden{ display:none !important; }
+
+  .screen{
+    position:fixed; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    padding:24px;
+    box-sizing:border-box;
+    background:rgba(6,14,22,0.55);
+    -webkit-backdrop-filter:blur(6px);
+    backdrop-filter:blur(6px);
+    z-index:10;
+  }
+
+  .menu-card{
+    width:100%; max-width:360px;
+    box-sizing:border-box;
+    padding:32px 28px 28px;
+    border-radius:24px;
+    background:rgba(18,40,53,0.92);
+    border:1px solid rgba(255,255,255,0.12);
+    color:#eaf6fb;
+    text-align:center;
+  }
+
+  .modal-title{
+    margin:0 0 22px;
+    font-size:22px;
+    font-weight:700;
+  }
+
+  .btn{
+    display:block;
+    width:100%;
+    box-sizing:border-box;
+    padding:14px 18px;
+    margin-bottom:12px;
+    border:none;
+    border-radius:14px;
+    font-size:16px;
+    font-weight:700;
+    cursor:pointer;
+    font-family:inherit;
+    transition:transform .08s ease, filter .15s ease;
+  }
+  .btn:last-child{ margin-bottom:0; }
+  .btn:active{ transform:scale(0.97); }
+  .btn-primary{
+    background:#33ccff;
+    color:#05222c;
+  }
+  .btn-primary:hover{ filter:brightness(1.06); }
+  .btn-secondary{
+    background:rgba(255,255,255,0.08);
+    color:#eaf6fb;
+    border:1px solid rgba(255,255,255,0.18);
+  }
+  .btn-secondary:hover{ background:rgba(255,255,255,0.14); }
+
+  .setting-row{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:16px;
+    padding:14px 4px;
+    border-bottom:1px solid rgba(255,255,255,0.08);
+    font-size:15px;
+  }
+  .setting-row:last-of-type{ border-bottom:none; }
+
+  /* iOS-style toggle switch */
+  .switch{ position:relative; display:inline-block; width:46px; height:26px; flex:none; }
+  .switch input{ opacity:0; width:0; height:0; }
+  .slider-toggle{
+    position:absolute; inset:0; cursor:pointer;
+    background:rgba(255,255,255,0.18);
+    border-radius:999px;
+    transition:.2s;
+  }
+  .slider-toggle::before{
+    content:""; position:absolute;
+    width:20px; height:20px; left:3px; top:3px;
+    background:#fff; border-radius:50%;
+    transition:.2s;
+  }
+  .switch input:checked + .slider-toggle{ background:#33ccff; }
+  .switch input:checked + .slider-toggle::before{ transform:translateX(20px); }
+
+  input[type="range"]{
+    -webkit-appearance:none; appearance:none;
+    width:150px; height:4px;
+    border-radius:999px;
+    background:rgba(255,255,255,0.18);
+    outline:none;
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none;
+    width:18px; height:18px; border-radius:50%;
+    background:#33ccff;
+    cursor:pointer;
+  }
+  input[type="range"]::-moz-range-thumb{
+    width:18px; height:18px; border-radius:50%; border:none;
+    background:#33ccff;
+    cursor:pointer;
+  }
+  input[type="range"]:disabled{ opacity:0.4; }
+
+  #languageSelect{
+    max-width:170px;
+    padding:6px 10px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,0.18);
+    background:rgba(255,255,255,0.08);
+    color:#eaf6fb;
+    font-size:14px;
+    font-family:inherit;
+    cursor:pointer;
+  }
+  #languageSelect option{ background:#122835; color:#eaf6fb; }
+
+  #btnInGameSettings{
+    position:fixed;
+    top:max(16px, env(safe-area-inset-top));
+    right:max(16px, env(safe-area-inset-right));
+    width:44px; height:44px;
+    border-radius:50%;
+    border:1px solid rgba(255,255,255,0.18);
+    background:rgba(10,24,32,0.55);
+    color:#eaf6fb;
+    font-size:20px;
+    line-height:1;
+    cursor:pointer;
+    z-index:9;
+    -webkit-backdrop-filter:blur(4px);
+    backdrop-filter:blur(4px);
+  }
+  #btnInGameSettings:active{ transform:scale(0.94); }
+
+  /* =========================================================================
+     First-play tutorial (see the "Tutorial" section in the script): a
+     pointing hand that demos the drag-to-aim gesture over the launcher,
+     plus a tip bubble anchored above it. Both are positioned every frame
+     from the pool's logical coordinates and never block input.
+     ========================================================================= */
+  #tutorialTip{
+    position:fixed; left:0; top:0;
+    z-index:6;
+    box-sizing:border-box;
+    max-width:min(300px, calc(100vw - 32px));
+    padding:12px 16px;
+    border-radius:16px;
+    background:#fff;
+    color:#0b4a63;
+    box-shadow:0 8px 24px rgba(6,40,58,0.28);
+    font-size:15px;
+    font-weight:600;
+    line-height:1.35;
+    text-align:center;
+    pointer-events:none;
+    opacity:0;
+    transition:opacity .25s ease;
+  }
+  #tutorialTip.show{ opacity:1; }
+  #tutorialTip b{ color:#0f8fc4; }
+  #tutorialTip b.danger{ color:#e8434b; }
+  .tip-merge-row{
+    display:flex; align-items:center; justify-content:center; gap:4px;
+    margin-bottom:6px;
+    font-size:22px; font-weight:800; color:#0f8fc4;
+  }
+  .tip-merge-row img{ width:44px; height:44px; object-fit:contain; }
+
+  #tutorialHand{
+    position:fixed; left:0; top:0;
+    z-index:6;
+    width:56px; height:70px;
+    pointer-events:none;
+    opacity:0;
+    transform-origin:26px 3.5px; /* fingertip */
+    filter:drop-shadow(0 4px 6px rgba(6,40,58,0.35));
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+
+<div id="leftPanel" class="side-panel hidden">
+  <div class="panel-title" data-i18n="score">Score</div>
+  <div id="scoreValue">0</div>
+  <div class="panel-title" id="leaderboardTitle" data-i18n="leaderboard">Leaderboard</div>
+  <ol id="leaderboardList" class="leaderboard-list"></ol>
+  <button id="btnLeaderboard" class="leaderboard-btn" data-i18n="leaderboard">Leaderboard</button>
+</div>
+
+<div id="rightPanel" class="side-panel hidden">
+  <div class="panel-title" data-i18n="next">Next</div>
+  <div id="nextPreviewWrap">
+    <img id="nextPreviewImg" alt="next" data-i18n-alt="next">
+  </div>
+</div>
+
+<div id="leaderboardScreen" class="screen hidden">
+  <div class="menu-card">
+    <h2 class="modal-title" data-i18n="leaderboard">Leaderboard</h2>
+    <ol id="leaderboardListModal" class="leaderboard-list"></ol>
+    <button id="btnLeaderboardClose" class="btn btn-primary" data-i18n="ok">OK</button>
+  </div>
+</div>
+
+<div id="settingsScreen" class="screen hidden">
+  <div class="menu-card">
+    <h2 class="modal-title" data-i18n="settings">Settings</h2>
+    <div class="setting-row">
+      <span data-i18n="soundEffects">Sound Effects</span>
+      <label class="switch">
+        <input type="checkbox" id="soundToggle" checked>
+        <span class="slider-toggle"></span>
+      </label>
+    </div>
+    <div class="setting-row">
+      <span data-i18n="volume">Volume</span>
+      <input type="range" id="volumeSlider" min="0" max="100" value="80">
+    </div>
+    <div class="setting-row">
+      <span data-i18n="language">Language</span>
+      <select id="languageSelect"></select>
+    </div>
+    <div class="setting-row hidden" id="vibrationRow">
+      <span data-i18n="vibration">Vibration</span>
+      <label class="switch"><input type="checkbox" id="vibrationToggle" checked aria-label="Vibration" data-i18n-aria-label="vibration"><span class="slider-toggle"></span></label>
+    </div>
+    <div class="hidden" id="playGamesSettings">
+      <p data-i18n="playGamesAccountHelp">Manage your game account in device settings: Google ? All services ? Play Games.</p>
+      <p id="playGamesStatus" role="status" aria-live="polite"></p>
+      <button id="btnPlayGamesSignIn" class="btn" data-i18n="playGamesSignIn">Sign in to Play Games</button>
+      <button id="btnPlayGamesAccount" class="btn" data-i18n="playGamesAccount">Account settings</button>
+      <button id="btnPlayGamesLeaderboard" class="btn" data-i18n="leaderboard">Leaderboard</button>
+    </div>
+    <button id="btnPrivacy" class="btn" data-i18n="privacyPolicy">Privacy Policy</button>
+    <button id="btnSettingsClose" class="btn btn-primary" data-i18n="ok">OK</button>
+  </div>
+</div>
+
+<button id="btnInGameSettings" class="hidden" title="Settings" aria-label="Settings" data-i18n-title="settings" data-i18n-aria-label="settings">⚙</button>
+
+<dialog id="privacyDialog" aria-labelledby="privacyTitle" style="width:min(92vw,760px);height:85dvh;max-height:90vh;padding:16px;border:0;border-radius:16px;background:#fff;color:#183746;">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;height:44px;">
+    <h2 id="privacyTitle" style="font-size:18px;margin:0" data-i18n="privacyPolicy">Privacy Policy</h2>
+    <button id="btnPrivacyClose" class="btn" autofocus data-i18n="close">Close</button>
+  </div>
+  <iframe src="privacy/index.html" title="Privacy Policy / 개인정보처리방침" style="width:100%;height:calc(100% - 52px);border:0;margin-top:8px;"></iframe>
+</dialog>
+<div id="tutorialTip"></div>
+<svg id="tutorialHand" viewBox="0 0 64 80" aria-hidden="true">
+  <!-- Same shapes twice: a thick dark pass for the outline, then a white
+       fill on top, so overlapping parts don't show inner seams. -->
+  <g fill="#0b4a63" stroke="#0b4a63" stroke-width="8" stroke-linejoin="round">
+    <rect x="24" y="4" width="12" height="46" rx="6"/>
+    <rect x="36" y="30" width="11" height="24" rx="5.5"/>
+    <rect x="46" y="34" width="10" height="22" rx="5"/>
+    <rect x="12" y="40" width="44" height="34" rx="14"/>
+    <rect x="6" y="38" width="12" height="24" rx="6" transform="rotate(-25 12 50)"/>
+  </g>
+  <g fill="#fff">
+    <rect x="24" y="4" width="12" height="46" rx="6"/>
+    <rect x="36" y="30" width="11" height="24" rx="5.5"/>
+    <rect x="46" y="34" width="10" height="22" rx="5"/>
+    <rect x="12" y="40" width="44" height="34" rx="14"/>
+    <rect x="6" y="38" width="12" height="24" rx="6" transform="rotate(-25 12 50)"/>
+  </g>
+</svg>
+
+<script>
+(function(){
+"use strict";
+
+/* =========================================================================
+   CAT MERGE — web port
+   Ported from the Godot 4 project (Rapier2D physics) in this repo:
+     Scripts/game_manager.gd, Scripts/main.gd, Scripts/launcher.gd, Scripts/slime.gd
+     Scenes/Main.tscn, Scenes/slime.tscn, Scenes/GameOverScreen.tscn
+
+   Gameplay/physics parity notes:
+   - Zero gravity, frictionless circle bodies (bounce restitution 0.8),
+     confined by a rectangular box (the original "Baffle" hollow polygon).
+   - Launcher: drag to aim, release to shoot towards the drag point (not a
+     slingshot pullback) — same as launcher.gd's shoot_dir/shoot_power math.
+   - Merge rule: two same-level, non-merging slimes touching -> merge into
+     next level at their midpoint, velocity = mass-weighted average (all
+     masses are 1, same as Godot's default RigidBody2D mass), score added
+     for the level that merged, both removed immediately.
+   - Danger zone: circle at the launcher position; if any live slime stays
+     inside it for 5 continuous seconds -> game over (same as the
+     DangerArea + GameOverTimer in launcher.gd).
+
+   Visual theme (new): clean vector "pool" reskin.
+   - The play field is a fixed BASE_W×BASE_H rectangle, always — it no
+     longer grows/shrinks with the browser window (letterboxed instead).
+     Its shape follows images/BG2.png, a peanut-shaped checkered ring on a
+     transparent canvas — see drawPoolFrame(). The playable area is the
+     interior enclosed by that ring (filled with the sea); the ring is the
+     wall. A distance field built from that image's alpha channel at load
+     time (buildTrackMask()) drives both the slime-vs-wall collision and
+     the water FX clipping, since the ring is an arbitrary curved shape,
+     not 4 straight lines.
+   - Slimes are rendered as cute round-eyed pool "tube floats" (a ring with
+     a water-peek hole) instead of flat circles. Collision radius is
+     unchanged — only the paint job changed.
+   ========================================================================= */
+
+  // ---------------------------------------------------------------------
+  // GameManager equivalent (Scripts/game_manager.gd)
+  // ---------------------------------------------------------------------
+  // Size keeps growing every level (no more resetting/cycling back down) —
+  // level 1 starts at the old level-5 size (260, per an earlier request),
+  // and each level continues the same ~1.3x-per-level growth the original
+  // table used, all scaled by SIZE_SCALE on top of that.
+  // SIZE_SCALE was 0.8 for the old square pool; BG2.png's winding track is
+  // only ~166px wide (median, at field scale) instead of a wide-open
+  // square, so this is shrunk for the track — 0.37 gives level 1 a ~81px
+  // collider diameter, a comfortable fraction of the track's width (still
+  // clear of both edges even at the track's narrowest ~98px points), sized
+  // up as far as felt reasonable without it constantly scraping both walls.
+  // Upper levels (roughly level 5+, whose collider exceeds the local track
+  // width) are expected to hug both edges as they squeeze through — the
+  // per-level growth curve itself is untouched, only this one global knob.
+  const SIZE_SCALE = 0.925; // 0.37 x2.5 for the wide peanut pool
+  const SLIME_DATA = {
+    1:  { color: "#ff5e62", size: 260.0  * SIZE_SCALE, score: 10 },
+    2:  { color: "#ff9966", size: 340.0  * SIZE_SCALE, score: 20 },
+    3:  { color: "#ffcc33", size: 450.0  * SIZE_SCALE, score: 40 },
+    4:  { color: "#66ff99", size: 590.0  * SIZE_SCALE, score: 80 },
+    5:  { color: "#33ccff", size: 770.0  * SIZE_SCALE, score: 160 },
+    6:  { color: "#a18cd1", size: 1000.0 * SIZE_SCALE, score: 320 },
+    7:  { color: "#fbc2eb", size: 1300.0 * SIZE_SCALE, score: 640 },
+    8:  { color: "#ff5e62", size: 1690.0 * SIZE_SCALE, score: 1280 },
+    9:  { color: "#ff9966", size: 2200.0 * SIZE_SCALE, score: 2560 },
+    10: { color: "#ffcc33", size: 2860.0 * SIZE_SCALE, score: 5120 },
+  };
+  function getSlimeData(level){ return SLIME_DATA[level] || SLIME_DATA[1]; }
+
+  // ---------------------------------------------------------------------
+  // Slime face art — pool-float character images (images/*.png), assigned
+  // smallest level first: fox, dog, mouse, cat, rabbit, dear. Levels beyond
+  // the 6 images just cycle back through the same set (level 7 reuses
+  // fox's art, etc.)
+  // ---------------------------------------------------------------------
+  const SLIME_IMAGE_NAMES = ["fox", "dog", "mouse", "cat", "rabbit", "dear"];
+  const slimeImages = {};
+  for (const name of SLIME_IMAGE_NAMES){
+    const img = new Image();
+    img.src = `images/${name}.png`;
+    slimeImages[name] = img;
+  }
+  // Deer is the final friend: two deer merging disappear instead of
+  // spawning a next level (see physicsStep's merge branch).
+  const DEER_LEVEL = SLIME_IMAGE_NAMES.indexOf("dear") + 1;
+  function getSlimeImage(level){
+    const name = SLIME_IMAGE_NAMES[(level - 1) % SLIME_IMAGE_NAMES.length];
+    return slimeImages[name];
+  }
+
+  // Keep a few power-of-two sizes per character; never upscale the source.
+  const slimeSpriteCache = new Map();
+  function getSlimeSprite(level, logicalDiameter){
+    const img = getSlimeImage(level);
+    if (!img || !img.complete || !img.naturalWidth) return img;
+    const target = Math.max(32, logicalDiameter * scale * DPR);
+    const size = Math.min(img.naturalWidth, 2 ** Math.ceil(Math.log2(target)));
+    if (size >= img.naturalWidth) return img;
+    const key = `${(level - 1) % SLIME_IMAGE_NAMES.length}:${size}`;
+    if (!slimeSpriteCache.has(key)){
+      const sprite = document.createElement("canvas");
+      sprite.width = sprite.height = size;
+      const g = sprite.getContext("2d");
+      g.imageSmoothingQuality = "high";
+      g.drawImage(img, 0, 0, size, size);
+      slimeSpriteCache.set(key, sprite);
+    }
+    return slimeSpriteCache.get(key);
+  }
+
+  // ---------------------------------------------------------------------
+  // Map/track art (images/BG2.png) — a winding S-shaped track drawn on a
+  // mostly-transparent canvas (2569x3061, not a square frame like the old
+  // images/BG.png). Since the field is a fixed BASE_W x BASE_H rectangle
+  // matching that same aspect ratio (see the viewport section below), a
+  // single ctx.drawImage() at one constant scale covers the whole field
+  // with zero distortion, same as before — see drawPoolFrame().
+  //
+  // Like BG.png, BG2.png is a border frame — a peanut-shaped checkered
+  // ring — around an open interior, which is the playable pool (filled
+  // with the sea, see drawWater()). The ring is curved, not 4 straight
+  // walls, so buildTrackMask() reads the image's alpha channel once it
+  // loads into a small offscreen canvas (downsampled for speed/memory —
+  // collision doesn't need full source resolution), flood-fills the
+  // outside to isolate the enclosed interior, and runs a 2-pass Euclidean
+  // distance transform (Felzenszwalb & Huttenlocher) over it, producing
+  // distField: for every grid cell, the signed distance (in field px) to
+  // the ring's inner edge. That single precomputed grid
+  // answers both "how far can a slime's center be from the nearest wall"
+  // (physicsStep's push-out) and "which direction is away from the nearest
+  // wall" (the gradient, via sampleTrackNormal) without re-scanning the
+  // image every frame.
+  // ---------------------------------------------------------------------
+  const bgImage = new Image();
+  bgImage.src = "images/BG2.png";
+
+  let trackReady = false;   // true once distField below is usable
+  let distField = null;     // Float32Array[gridW*gridH], signed distance-to-wall in field px (+ inside the pool)
+  let waterMaskCanvas = null; // gridW x gridH, opaque wherever the sea is drawn (interior + ring)
+  let gridW = 0, gridH = 0;
+  // BG2.png's alpha pre-thresholded to a 1-bit 609x725 grid (white = ring),
+  // used only when the real image can't be read back (see buildTrackMask()).
+  // Regenerate if BG2.png or TRACK_GRID_CELL changes.
+  const trackMaskFallback = new Image();
+  trackMaskFallback.src = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAmEAAALVAQAAAACg1QuFAAAQ4UlEQVR42s1dzW7kxhHuriE0PAgRjzoYmckTZHPbQ2LxUfYRfPQhgHgIgtziN/A+ChMYiG/ZR6ABI9hTQBkCQgkcMgdpZtjsv/qTd3hae7Wl6vrv7uqvjPm1v9/9qy20aN3P8zzP838xP2szf78Zj3+aIU8t8yPb8fx7Zym17bD8r0lGbTO4UhlE1P6cZJX43cze17J1GuIko9jE374P/fKOy1vQIg4Fj7e7sJpbFm82Yl1J5qK8fR2zwYbB29k/199DReftj3ErZFjuHP9a8kpTPvRUUlf6bYLtK+o67Zz6OiJvv03+rlua3Gw6LsZdHxjh3TYkal9lxFqTqH3IUHtPkVvcq3L+GOLtOmtBDcHa7ubc1+N5zi80GuSAs1CzwcvtG4QwWvRKEfWG+WmPpIYQW1RwkBfb4fCHGiu4WPV3/L5vgiGqYcXwk2X9Hhvj3BgeM1PXpgdGYeRwsFv+zUh3qykhA7rYmoQQWqrY+hTfHVVsTSqVDUSxBcLOLqMGG3XSUGZaep3Ne9biR34JuWedDSNhJYRT6iathhVv54LlOUhtSmf8FbV3AbqOWKtkcWMjSoiWt3NKDRCh/ZjP8w1eCYgfadGeMCIcuc+t9KSEHxAlTYkOIBj+p4xOT1VgasNyLhVteqVXWY0aY+Y6rlQIesKnlDg+ZYtCN+Ckg/4m7qkOb8dyIE3t0GRrc0elHS6iTkmdHmNh7lTmtG2yqZUWyFOU56hSIaDSx5yNN5QMk/3hHUa+96kYHnKuHqHSfImxieVU8NX7mKV2iAVz8P/4KS/hOn8UuMVXPzcRfYGX0jDUhojfg+elzwhqo5cwPWqvv+gzpsDPB3NKmXefMyZLKUF3OUPfYD0hoX9YRxActTEcRWBtID+jqB3CJuIFRuQmpXFjfyweIfdPu2AUgZW5Yan1aYOzpP3T0QLGCG/gemDum4Jih/AK8huoJhSTYGVuH7Gb4jZZYN6QVHpSahvmrXKsMv99DhkcuNHtEU1tXDLhUasN7ZtCJxTAU2nGzC0hVC4DZnI7RljqLvAvgHyEtBJKE6JWEEJl3gdvSD6/kE0X4q0i+XxsHeAYb0+g9ur3VVwLHyn228bj5T3VQI4mMkUT/WToF3tTYKWWbCBHldmo3EYStWfffAF1B4A90IelK9CuR+fMTvwTjavGi76A3KPHDa7yqVXYgya/ZCljRYjh3CSPEblRqQ0eBeDlmIV5Wn+3OxuTvOBL2YgNr5R5G9+sqVlydFvQqdfUmI7Vrs0X6CXv+h9UYWotlVof9lNmo8sQdoYbjiscdzRjcKUz03y97XdFj+PBfwHpLQkmpVr0NS7K4JoQtUcjzgzADyEn892HcnNnmJ03fWilHdd8tbQwrpwBzjpujdjgZLyZlZdbczpetnQ6L/9wdrelwHNT/8wRBAHpKGsbkNukIEGhFjrXUeFkMCOHWq9vIWc3F1IbXLeHU+gd+K4VWGnPoTYFqO3ZK53d/AySgGTWx5cgCb3e6YqKhRQ+tVaQtbR460IHZcQ+npVrWT9lGUG/qMfbLHEtLbmNjpSAlxAiQUTK2xReqSiQ75V4m/U96xRE4Ehx1HB7MW+tKrVuGeB05LbkrRBsJ90AJ+atV5XbsKSiIzerRc0JIiBKzmv/1rcQBbevz9RKEbkmxFtnFAKcXG7t5WrhRUSVKm+lFrVeX27FZWphWFGr5EFkcaTdX9BKlztlfS1UCiGp0eKtcXnr1TaVl2a9ywAn18Iy+J7ktr8MC1lmFC0tVO5KO1m4LLV4G6L39V/e3hahXIHaqM8baFGbXJrDJXn9ovKF9cZLtA3U4K3Rr7gah1ppFEK5Bm+ts9Lxoiyki3Y3yRKDfgac1GpV0BJgpbXSQd8XSoea1dLCbLRCudpKi7esuBpZYjhfFzXC421Vuc0utVardFDTgnWpVQpp5g0spDMKiaFxeCsvSQtnar2+ZxUKSQu800JJsgejGS5Fp9peQgWjEJL6N7SQySgFODAKaWY4Rg3/pYaSZ1Va1BojT6ily1upxVurUQ+GXwYxE2pxItEpOaqKL6xuPHsFzcKKt1pppYOSM4AxirsZMBqu1STeA/ILEVDrqTnzNvPAXpJys+JCBIxGSFrx1goaJ3JvY9mlA2jcP50cE4xRzAywzNbXStQGnWAHsYZpViGiWIfsT9QORsXgINqhL6HWqpgIROAceEUSOL5RKPHW04BjMtQGUWQaV9RGeUotz9QmlfoS3FLiVslCGo1EA+5RppUVcCDAnzLZp9+8kG5f+/FB+EzDJB+9DXzeJr8rrNDR6YwAAMwWvt6JWa0juB0CByH5/n0K9NCWkuIS1qe2V5LiEtaP3myjkhdmhV2Df+bwTodaa8Sljf8aYqND7bMRlg/NkloM8oHH22T4gmuj74w2jUodUgstrg6+HXvH3tGA/8idhSPq8zbym8E7X25TFiOSooXTC5OtSm3ZShv1wm9jbzWond57bTUKCJsFsEymqM7lbRZB13oVfs19adGHqJ1p7AynaRtCABJsI4EwxhOVuT6HmdAxrnch+oR812jVq+TC8ObFSFe8LV8/bsWnoJMRvViGxAOCrfiEtubhfwwIIM+J9oLX04KL9WhbJTB9YmDaRkxqx1rqKzWIIMcolK0rBEvCJi7G26GhYD1jdyEkENYobyuTbYW3FY+GfzAK5gIFt40GxA0DRHgTD6/3dIvbxHS60uMt521KFON5Rp2TbkZjzKGABEgZ3VUh9bCMXO9D9u3QnnCmF6T20LCO4guEAY9oCxkjR2QOIL6V6XSJcqpyiLYhIkO/rhTSuHjEoASZt4xIpU7omQmY4sYmV7rUQ4FfImLeB8bv7ZSwEGPMvKfYG+AxkBv0wWWc6BMjikD+watOG/yWUHdlV7pYqkpnQo2/+wH8Ukek1ydXisJCXfppmtpMvCuE9E/WtLvyCSe4RsFCSIJDyAR/BIwCV6uNEeLysS5rMHIj71CBDmLJpnYgkgHMLUSp1N3UqvZKdarUetolFxhNEwESSouQ2vQGHWugRG3+Ir3HE45ao+lZazilX7HLevqV5aYakYhuD5jnQ/OX0AJc5hv2UdVCvgjKQf0leCsIw5ImXIk8ZofQ0eI5qAoi8+PXtMwFOAAfHWp7VWq1pm1b7CYQZSGg6lkF6TVgjrf3xBsV0Cwt09S21FQDvDGWHGqd0Wk4dW+jkD86JHnryUVcgtqNZl6wPaH4zaLfTIzCPErt34bRSRv2xKsn3hakQAxT7SXU4E/0Gm4fo+bPo5S4gj9R1CDHNPm3sYEegllgvZ1k5wZ5RkZ8swPkr5AGNm9fY9C0sdSCU68/cq0jOH/WYG/SV106wfv5mRvffis90oPsROGBSS3c4veJSe1amO9dLXwjnkkMuYXOKrfXtF6d12u07PvTH6XtaoyeDo+3K/GxVOvPzzKpPgU8TuMHw7fdeR0eIxPJLQEL3ObwQ56YNdK1pn1EBnWTrGshl5k4+D5QH5zltlFZ6JG3m540Wj7DW3Bb+wv1SQQkbHeuuNils0AHryudIXX9PJdc5NgrnWOc+OybfxgGpHjEE55a8o5sPK24jm1NFaL4xNotjmGktYfvDPO0sfDr/KeKfQYHnk4eSibU0ul91vJVwHdG+t3x+nDdMqEPTA8pFbvS55G/tn4JRPTy/cXo9Ucwn7W5vJXijOfNX5CcBdavex53YsKTUfjuqU2uJjVRhh07VsWgi4f/bDRvBD5rULsS7x2DxivzzNZFxn4S40EtEVAHsfBhYbzfqd7yNEbRFUZhz6LrCr2cGpxdodecHiK13ZkxPDlu/tMLb4V41MRyhkspHMa12HsKZ9/41luJQT8qrYkwwsHOUQrDC2+10UDRUpxFsohnoprhHDb6JW+fdVZqjdHvJviog7K/ERvIuXAADVAvz0IOqtRGhWkfxoAKouIxaoAaOERrjIHXcNKr5GQwepBGxoBOD3UQ/UbeznEvdoXtiQIYvVip07tSrl12FN8oTx52kyQBTlor3YdRquRa0AzkLh6XURr70SnxBkozK4ZFkmnESaZ/gx6zQgkKv18FANkOsFNaKYQRAhUGBWolwPat+gYnpS4/0A29Nzqhd9ZCy6wud0bVMoVCpZgWHMxSSXibLlhuxj1GFobeV6DHvf5Ke3HoHS5SC8vVgWrb8eX3bHfiYNkp8VYtdgiXJrf9G2ihWVDba4yx1o9Id5JbinVv/YW9cLFv4FmjUQXZVaLm1M2gs+8YlHgrL3j+aRXHlWKHkO7tVlrphBAt3lolak0I+0p4na60Ugi8Ty8vxHoLZ2elbG+DDH22DGIyX4bcKme/AaNe3aAzo2aNnQ5a89+s7EbRhY0BzRDySo19pGeDQaAxIpSck05nzTeKoJFNZ9VIPilRq9YrbSQv9fZBue11RtOBbI5DvT6yuJMkrVVPg4pOlajZ0DQutcgNL4RLkWO1Z2q9IGmV0c5Lw39WQH1mj57oNwjC5V41n9aRe7dG4ArLCZKj+Lmv0jzKjT/Hc+KHpOItTn78+aeViivAq+2VgqzQ6ax0H5i327Ddvo51noyCZ42OTlvhigMTmS3feF1767htfkVwLvYbTABnuP1taHJ6L6wdep2V7kNaGLiOWodumbfMzisbRDnbMHsTNn7nLeiNV5PNdy78ZhDBDOXbIG8zs4N277fhAb/NvQ43g9zzOtMDrbf86b2h1ls4xfWSaQ3d6v91RpKa22BNR3WGXaAJHdh3UftkVW3FOcbpnG9YBjJGgkHHikdDZEZ8JT8yYk9TvQ51pLInp1ehpj4wzCHK+0wj/sR6muTLraUbHATNbTllu2V46RRV9J5R8o4qE0vfBXtIgTmeqo53yG/IjytsGP4ZeDsRSHTI25kaRTbhBzvAw326Dkc3Z/b0nqzS1BuXngyAMkQnMhNMZBOBjnBu/wvyxrRP9IcAuTz6GJ9TjEer/4Ayn5boCVMyWeyFTyiAA0t1HYOLAacLvyDa7hDmrSFNV6szL3buKH6/icLRr3poa9qhSpsuxnrSm+EpA+Q1kDCPxuT0XpxSt3HIDTDkq7fbOOQGuEaN8dQP+WdT9zMJGjryKgbIkG+/ScDFrN8vXBFSwnMeXqbBY2L1eeS4Dj/nocvN282XNl+l4LHsGiHsUCAQVmL7FVhH0czkwiscAhDyPfZd8ik+0EAGl6BYjxgEohE7SaxN8NYnMblCobtFvf/vcaxNqdQ4ZuCljDEuVtSUuupdGJLFGJt5qFITcps8Tt7XeLC0uyymgyUMOtpl0X0oQ5i2uVBj81hYEDq2vc5LLdfmbTMy2bpoKi0eaLDPAygZ/KS2KYsklt2T7ZKTqe6JgGQ3qV+9IpavkDcJ2/QQ05pcS4bjhS5sk4crGUF1gsD4Uw/ez44MaL7YwLwbH1mryx8uOVZmT1rb9ix8RHcY2vzXF1rfM1G/PDy5b039vyCE2Ihps0Efdv20RxzKoff1HzG83SC34lEMMaDD2iWsDTjDQj7jDjMbmdhWuXPXYYjFSzwwdFCYn+lzYw1nUoFlIEZa7JEyxn6f0AfUnyT24XFtJ74jZCa9GjKqJJBB5n8gUBvQHYcobefWmoTmAypm/Y8kS8zEuDQ8os1BT5MwCL1flaln/0b0ue3ACkaRXdsz19goKJxcJI9NnFhnjB5zkwwOjsqapWD2WtZ1XsRCH4wRj+4+fc/c7vSHkEP8h51/At6KgUON/IgPV/oLCPrwH9Zx7u+iTOuuFYn6Gp+VuTzCPPzTGLXxx53R+DakO4z8915hQjn7+z951ifuDv33ogAAAABJRU5ErkJggg==";
+  const TRACK_GRID_CELL = 3; // field px per distance-field cell
+
+  function clampInt(v, lo, hi){ return v < lo ? lo : (v > hi ? hi : v); }
+
+  // Separable 1D squared-distance transform (Felzenszwalb & Huttenlocher) —
+  // for each index q in f[], finds min over all p of (q-p)^2 + f[p].
+  // Run once along columns then along rows to get a full 2D Euclidean
+  // distance transform in O(gridW*gridH) instead of O((gridW*gridH)^2).
+  function distanceTransform1D(f, n){
+    const d = new Float64Array(n);
+    const v = new Int32Array(n);
+    const z = new Float64Array(n + 1);
+    let k = 0;
+    v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
+    for (let q = 1; q < n; q++){
+      let s = ((f[q] + q*q) - (f[v[k]] + v[k]*v[k])) / (2*q - 2*v[k]);
+      while (s <= z[k]){
+        k--;
+        s = ((f[q] + q*q) - (f[v[k]] + v[k]*v[k])) / (2*q - 2*v[k]);
+      }
+      k++;
+      v[k] = q; z[k] = s; z[k+1] = Infinity;
+    }
+    k = 0;
+    for (let q = 0; q < n; q++){
+      while (z[k+1] < q) k++;
+      d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+    }
+    return d;
+  }
+
+  function distanceTransform2D(mask, w, h){
+    const INF = 1e10;
+    const g = new Float64Array(w * h);
+    for (let i = 0; i < w * h; i++) g[i] = mask[i] ? INF : 0;
+
+    const tmp = new Float64Array(w * h);
+    const col = new Float64Array(h);
+    for (let x = 0; x < w; x++){
+      for (let y = 0; y < h; y++) col[y] = g[y*w + x];
+      const d = distanceTransform1D(col, h);
+      for (let y = 0; y < h; y++) tmp[y*w + x] = d[y];
+    }
+
+    const row = new Float64Array(w);
+    const out = new Float32Array(w * h);
+    for (let y = 0; y < h; y++){
+      for (let x = 0; x < w; x++) row[x] = tmp[y*w + x];
+      const d = distanceTransform1D(row, w);
+      for (let x = 0; x < w; x++) out[y*w + x] = Math.sqrt(d[x]);
+    }
+    return out;
+  }
+
+  // Reads BG2.png's alpha into a small offscreen canvas and turns it into
+  // distField. Runs once, right after the image finishes loading.
+  function buildTrackMask(){
+    gridW = Math.ceil(BASE_W / TRACK_GRID_CELL);
+    gridH = Math.ceil(BASE_H / TRACK_GRID_CELL);
+    const readPixels = (img) => {
+      const maskCanvas = document.createElement("canvas");
+      maskCanvas.width = gridW;
+      maskCanvas.height = gridH;
+      const mctx = maskCanvas.getContext("2d");
+      mctx.drawImage(img, 0, 0, gridW, gridH);
+      return mctx.getImageData(0, 0, gridW, gridH).data;
+    };
+
+    const N = gridW * gridH;
+    const solid = new Uint8Array(N); // the peanut ring itself
+    try{
+      const alpha = readPixels(bgImage);
+      for (let i = 0; i < N; i++) solid[i] = alpha[i*4 + 3] > 128 ? 1 : 0;
+    } catch(e){
+      // Opened as file:// — Chrome treats local images as cross-origin and
+      // refuses getImageData, which would leave the pool with no walls and
+      // no water. Fall back to the pre-baked copy of this same mask.
+      if (!trackMaskFallback.complete){ trackMaskFallback.onload = buildTrackMask; return; }
+      const rgb = readPixels(trackMaskFallback);
+      for (let i = 0; i < N; i++) solid[i] = rgb[i*4] > 128 ? 1 : 0;
+    }
+
+    // Flood-fill the transparent cells reachable from the image border —
+    // that's the outside of the ring. Whatever transparent area is left
+    // unreached is the enclosed interior: the playable pool.
+    const outside = new Uint8Array(N);
+    const stack = new Int32Array(N);
+    let sp = 0;
+    const seed = (i) => { if (!solid[i] && !outside[i]){ outside[i] = 1; stack[sp++] = i; } };
+    for (let x = 0; x < gridW; x++){ seed(x); seed((gridH - 1) * gridW + x); }
+    for (let y = 0; y < gridH; y++){ seed(y * gridW); seed(y * gridW + gridW - 1); }
+    while (sp > 0){
+      const i = stack[--sp];
+      const x = i % gridW, y = (i / gridW) | 0;
+      if (x > 0) seed(i - 1);
+      if (x < gridW - 1) seed(i + 1);
+      if (y > 0) seed(i - gridW);
+      if (y < gridH - 1) seed(i + gridW);
+    }
+    const inside = new Uint8Array(N), notInside = new Uint8Array(N);
+    for (let i = 0; i < N; i++){ inside[i] = (!solid[i] && !outside[i]) ? 1 : 0; notInside[i] = 1 - inside[i]; }
+
+    // Signed distance: positive inside the pool (distance to the ring),
+    // negative in the ring/outside (distance back to the pool), so the
+    // gradient still points inward even if a slime ever ends up inside
+    // the ring instead of going flat and leaving it stuck there.
+    const dIn = distanceTransform2D(inside, gridW, gridH);     // cell units
+    const dOut = distanceTransform2D(notInside, gridW, gridH); // cell units
+    const distGrid = new Float32Array(N);
+    for (let i = 0; i < N; i++) distGrid[i] = (inside[i] ? dIn[i] : -dOut[i]) * TRACK_GRID_CELL; // -> field px
+    distField = distGrid;
+
+    // Water clip mask: interior + ring (everything not outside). The ring
+    // art is drawn over the water afterward, so the low-res mask's soft
+    // edge ends up hidden underneath the ring.
+    waterMaskCanvas = document.createElement("canvas");
+    waterMaskCanvas.width = gridW;
+    waterMaskCanvas.height = gridH;
+    const wctx = waterMaskCanvas.getContext("2d");
+    const wimg = wctx.createImageData(gridW, gridH);
+    for (let i = 0; i < N; i++) wimg.data[i*4 + 3] = outside[i] ? 0 : 255;
+    wctx.putImageData(wimg, 0, 0);
+
+    poolOutline = traceOutline(outside);
+    trackReady = true;
+    bgCacheDirty = true;
+    if (poolOutline) updateFitBox();
+  }
+
+  // Ordered outer edge of the ring (everything not `outside`), clockwise on
+  // screen starting from its topmost point — Moore-neighbor boundary trace
+  // over the grid, then smoothed so the stair-stepped cell edges read as
+  // one clean curve. Drives the evolution guide (see drawEvolutionGuide()).
+  let poolOutline = null; // { pts: [{x, y}] in field px, len: [cumulative arc length], total }
+  function traceOutline(outside){
+    const inBlob = (x, y) => x >= 0 && y >= 0 && x < gridW && y < gridH && !outside[y * gridW + x];
+    let sx = -1, sy = -1;
+    for (let i = 0; i < gridW * gridH && sx < 0; i++) if (!outside[i]){ sx = i % gridW; sy = (i / gridW) | 0; }
+    if (sx < 0) return null;
+
+    // Clockwise on screen (y down): W, NW, N, NE, E, SE, S, SW.
+    const DX = [-1, -1, 0, 1, 1, 1, 0, -1], DY = [0, -1, -1, -1, 0, 1, 1, 1];
+    const raw = [];
+    let px = sx, py = sy, back = 0; // the cell west of the start is outside (raster-scan order)
+    for (let guard = 0; guard < gridW * gridH; guard++){
+      raw.push({ x: px, y: py });
+      let found = false;
+      for (let k = 1; k <= 8; k++){
+        const d = (back + k) % 8;
+        const nx = px + DX[d], ny = py + DY[d];
+        if (inBlob(nx, ny)){
+          // Next scan resumes from the outside cell just before this one,
+          // expressed relative to the new position.
+          const pd = (back + k - 1) % 8;
+          const bx = px + DX[pd] - nx, by = py + DY[pd] - ny;
+          for (let j = 0; j < 8; j++) if (DX[j] === bx && DY[j] === by){ back = j; break; }
+          px = nx; py = ny;
+          found = true;
+          break;
+        }
+      }
+      if (!found || (px === sx && py === sy)) break;
+    }
+
+    // Moving-average smoothing (wrapping, since it's a closed loop).
+    const n = raw.length, W = 6;
+    const pts = [];
+    for (let i = 0; i < n; i++){
+      let ax = 0, ay = 0;
+      for (let k = -W; k <= W; k++){ const q = raw[(i + k + n) % n]; ax += q.x; ay += q.y; }
+      pts.push({ x: (ax / (2*W + 1) + 0.5) * TRACK_GRID_CELL, y: (ay / (2*W + 1) + 0.5) * TRACK_GRID_CELL });
+    }
+    const len = [0];
+    for (let i = 1; i <= n; i++){
+      const a = pts[i - 1], b = pts[i % n];
+      len.push(len[i - 1] + Math.hypot(b.x - a.x, b.y - a.y));
+    }
+    return { pts, len, total: len[n] };
+  }
+
+  // Point + outward normal at arc length s along poolOutline (wraps).
+  function outlineAt(s){
+    const o = poolOutline, n = o.pts.length;
+    s = ((s % o.total) + o.total) % o.total;
+    let lo = 0, hi = n;
+    while (hi - lo > 1){ const mid = (lo + hi) >> 1; if (o.len[mid] <= s) lo = mid; else hi = mid; }
+    const a = o.pts[lo], b = o.pts[(lo + 1) % n];
+    const seg = o.len[lo + 1] - o.len[lo] || 1;
+    const f = (s - o.len[lo]) / seg;
+    const x = a.x + (b.x - a.x) * f, y = a.y + (b.y - a.y) * f;
+    // Tangent from a wider window so the normal doesn't jitter.
+    const p0 = o.pts[(lo - 8 + n) % n], p1 = o.pts[(lo + 9) % n];
+    const tl = Math.hypot(p1.x - p0.x, p1.y - p0.y) || 1;
+    const tx = (p1.x - p0.x) / tl, ty = (p1.y - p0.y) / tl;
+    return { x, y, tx, ty, nx: ty, ny: -tx }; // clockwise loop -> outward = tangent rotated -90°
+  }
+  // Deferred even when the image is already cached: buildTrackMask() reads
+  // BASE_W/BASE_H, which are declared further down in this script.
+  if (bgImage.complete && bgImage.naturalWidth > 0) queueMicrotask(buildTrackMask);
+  else bgImage.onload = buildTrackMask;
+
+  function bilinearSampleField(field, w, h, gx, gy){
+    const x0 = Math.floor(gx), y0 = Math.floor(gy);
+    const fx = gx - x0, fy = gy - y0;
+    const cx0 = clampInt(x0, 0, w - 1), cx1 = clampInt(x0 + 1, 0, w - 1);
+    const cy0 = clampInt(y0, 0, h - 1), cy1 = clampInt(y0 + 1, 0, h - 1);
+    const v00 = field[cy0*w + cx0], v10 = field[cy0*w + cx1];
+    const v01 = field[cy1*w + cx0], v11 = field[cy1*w + cx1];
+    const top = v00 + (v10 - v00) * fx;
+    const bot = v01 + (v11 - v01) * fx;
+    return top + (bot - top) * fy;
+  }
+
+  // Distance (field px) from (x, y) to the nearest non-track pixel. Callers
+  // treat "not ready yet" as open/safe (a huge distance) so nothing collides
+  // against a mask that doesn't exist yet during the brief image-load window.
+  function sampleTrackDistance(x, y){
+    if (!trackReady) return 1e9;
+    return bilinearSampleField(distField, gridW, gridH, x / TRACK_GRID_CELL, y / TRACK_GRID_CELL);
+  }
+
+  // Direction away from the nearest wall at (x, y) — the distance field's
+  // gradient, via central differences, normalized. Used to push an
+  // overlapping slime back onto the track and to reflect its velocity.
+  function sampleTrackNormal(x, y){
+    const eps = TRACK_GRID_CELL;
+    const nx = sampleTrackDistance(x + eps, y) - sampleTrackDistance(x - eps, y);
+    const ny = sampleTrackDistance(x, y + eps) - sampleTrackDistance(x, y - eps);
+    const len = Math.hypot(nx, ny);
+    if (len < 1e-6) return { x: 0, y: -1 };
+    return { x: nx / len, y: ny / len };
+  }
+
+  const GameManager = {
+    currentScore: 0,
+    addScore(amount){ this.currentScore += amount; onScoreChanged(this.currentScore); }
+  };
+
+  // Score awarded for a plain (non-merging) bounce between two different-
+  // level slimes — small, so it never rivals the big merge payouts, but
+  // rewards keeping the pool active.
+  const COLLISION_SCORE = 1;
+
+  // ---------------------------------------------------------------------
+  // CrazyGames SDK v3 — thin wrapper. Every call is a no-op when the SDK
+  // script failed to load or the environment is "disabled" (any domain
+  // other than crazygames.com / localhost), so the game runs unchanged.
+  // Gameplay start/stop is tracked as a desired state and only sent on
+  // change, once the SDK is ready and loading has been reported done.
+  // ---------------------------------------------------------------------
+  const CG = (() => {
+    let sdk = null;
+    let loaded = false;
+    let wantPlaying = false, sentPlaying = false;
+    // The game waits on `ready` before starting, so it must always settle:
+    // on file:// SDK.init() never resolves in practice, so it's skipped
+    // there (the SDK would report "disabled" anyway), and anywhere else a
+    // hung init gives up after INIT_TIMEOUT_MS and the game runs without it.
+    const INIT_TIMEOUT_MS = 5000;
+    const ready = (async () => {
+      try{
+        const s = window.CrazyGames && window.CrazyGames.SDK;
+        if (!s || location.protocol === "file:") return;
+        const ok = await Promise.race([
+          s.init().then(() => true),
+          new Promise(r => setTimeout(() => r(false), INIT_TIMEOUT_MS)),
+        ]);
+        if (!ok){ console.warn("CrazyGames SDK init timed out; running without it"); return; }
+        if (s.environment !== "disabled") sdk = s;
+      } catch(e){ console.warn("CrazyGames SDK init failed", e); }
+    })();
+    function call(fn){
+      if (!sdk) return;
+      try{ fn(sdk); } catch(e){ console.warn("CrazyGames SDK call failed", e); }
+    }
+    // The SDK drops start/stop calls made <1s apart ("call throttled"), so
+    // quick toggles (e.g. opening and closing settings) are deferred and
+    // only the final state is sent.
+    const MIN_GAP_MS = 1100;
+    let lastSentAt = -Infinity, syncTimer = 0;
+    function syncPlaying(){
+      if (!sdk || !loaded || wantPlaying === sentPlaying || syncTimer) return;
+      const wait = lastSentAt + MIN_GAP_MS - performance.now();
+      if (wait > 0){
+        syncTimer = setTimeout(() => { syncTimer = 0; syncPlaying(); }, wait);
+        return;
+      }
+      sentPlaying = wantPlaying;
+      lastSentAt = performance.now();
+      call(s => sentPlaying ? s.game.gameplayStart() : s.game.gameplayStop());
+    }
+    return {
+      ready,
+      loadingStart(){ call(s => s.game.loadingStart()); },
+      loadingStop(){ call(s => s.game.loadingStop()); loaded = true; syncPlaying(); },
+      setPlaying(on){ wantPlaying = on; syncPlaying(); },
+      happytime(){ call(s => s.game.happytime()); },
+      get muteAudio(){ return !!(sdk && sdk.game.settings && sdk.game.settings.muteAudio); },
+      get locale(){
+        try{ return (sdk && sdk.user && sdk.user.systemInfo && sdk.user.systemInfo.locale) || null; }
+        catch(e){ return null; }
+      },
+      onSettingsChange(fn){ call(s => s.game.addSettingsChangeListener(fn)); },
+      // Data module (cloud save for logged-in players, the SDK's own
+      // LocalStorage for guests). Only usable after `ready` resolves.
+      get data(){ return sdk && sdk.data ? sdk.data : null; },
+    };
+  })();
+
+  // ---------------------------------------------------------------------
+  // Save storage — everything persistent (settings, best scores, tutorial
+  // flags) goes through here. On CrazyGames it uses the SDK Data module
+  // exclusively (the platform requires relying on it, not on local saves);
+  // off-platform (SDK "disabled" / missing) it falls back to localStorage.
+  // Reads happen once in loadSaves(), after CG.ready — the Data module
+  // isn't available before SDK.init() finishes.
+  // ---------------------------------------------------------------------
+  const Store = {
+    get(key){
+      try{
+        const d = CG.data;
+        return d ? d.getItem(key) : localStorage.getItem(key);
+      } catch(e){ return null; } // corrupt/unavailable storage
+    },
+    set(key, value){
+      try{
+        const d = CG.data;
+        if (d) d.setItem(key, value); else localStorage.setItem(key, value);
+      } catch(e){ console.warn("Save failed", key, e); }
+    },
+  };
+
+  // ---------------------------------------------------------------------
+  // Settings — sound on/off + volume + language, saved via Store
+  // and applied via a master GainNode all synthesized sounds route through.
+  // ---------------------------------------------------------------------
+  const SETTINGS_KEY = "catMergeSettings";
+  const settings = { soundOn: true, vibrationOn: true, volume: 0.8, lang: "auto" };
+  function loadSettings(){
+    try{
+      const raw = Store.get(SETTINGS_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.vibrationOn === "boolean") settings.vibrationOn = parsed.vibrationOn;
+      if (typeof parsed.soundOn === "boolean") settings.soundOn = parsed.soundOn;
+      if (typeof parsed.volume === "number") settings.volume = Math.min(1, Math.max(0, parsed.volume));
+      if (typeof parsed.lang === "string") settings.lang = parsed.lang;
+    } catch(e){ /* ignore corrupt save */ }
+  }
+  function saveSettings(){
+    Store.set(SETTINGS_KEY, JSON.stringify(settings));
+  }
+  // The platform's mute setting takes priority over the in-game toggle.
+  function effectiveVolume(){
+    return settings.soundOn && !CG.muteAudio ? settings.volume : 0;
+  }
+  function applyAudioSettings(){
+    const v = effectiveVolume();
+    if (masterGain) masterGain.gain.value = v;
+    bgmAudio.volume = v;
+    bgmAudio.muted = v === 0; // iOS ignores .volume on media elements
+  }
+
+  // ---------------------------------------------------------------------
+  // Localization — every user-facing string lives in STRINGS, keyed by
+  // language code. DOM text is tagged with data-i18n (textContent) or
+  // data-i18n-<attr> (that attribute) and refreshed by applyLanguage();
+  // canvas text calls t() every frame, so it follows along automatically.
+  // Language pick order: ?lang= URL param > saved setting > CrazyGames
+  // user locale > browser languages > English. Missing keys fall back to
+  // English. Tip strings contain markup and are set via innerHTML.
+  // ---------------------------------------------------------------------
+  const LANGUAGES = {
+    "en":    "English",
+    "ko":    "한국어",
+    "ja":    "日本語",
+    "zh-CN": "简体中文",
+    "zh-TW": "繁體中文",
+    "es":    "Español",
+    "pt":    "Português",
+    "fr":    "Français",
+    "de":    "Deutsch",
+    "it":    "Italiano",
+    "ru":    "Русский",
+    "tr":    "Türkçe",
+    "pl":    "Polski",
+    "nl":    "Nederlands",
+    "id":    "Bahasa Indonesia",
+    "vi":    "Tiếng Việt",
+    "th":    "ไทย",
+  };
+  const STRINGS = {
+    "en": {
+      settings: "Settings", soundEffects: "Sound Effects", volume: "Volume",
+      language: "Language", auto: "Auto", ok: "OK",
+      score: "Score", leaderboard: "Leaderboard", next: "Next", noRecords: "No records yet",
+      gameOver: "GAME OVER", scoreLabel: "Score: {score}", restart: "Restart",
+      tipAim: "<b>Drag</b> toward where you want to shoot,<br>then <b>release</b>!",
+      tipMerge: "Bump <b>matching critters</b> together to merge them!",
+      tipPraise: "<b>Nice merge!</b><br>Keep merging for a high score.",
+      tipDanger: "Watch out! A critter in the <b class=\"danger\">red zone</b> fills the timer.<br>Knock it out before it's full!",
+    },
+    "ko": {
+      settings: "설정", soundEffects: "효과음", volume: "볼륨",
+      language: "언어", auto: "자동", ok: "확인",
+      score: "점수", leaderboard: "순위표", next: "다음", noRecords: "아직 기록이 없어요",
+      gameOver: "게임 오버", scoreLabel: "점수: {score}", restart: "다시 시작",
+      tipAim: "쏘고 싶은 방향으로 <b>드래그</b>한 뒤<br><b>손을 떼세요</b>!",
+      tipMerge: "<b>같은 동물</b>끼리 부딪혀서 합쳐 보세요!",
+      tipPraise: "<b>잘했어요!</b><br>계속 합쳐서 높은 점수를 노려 보세요.",
+      tipDanger: "조심하세요! <b class=\"danger\">빨간 구역</b>에 동물이 있으면 타이머가 차요.<br>가득 차기 전에 밀어내세요!",
+    },
+    "ja": {
+      settings: "設定", soundEffects: "効果音", volume: "音量",
+      language: "言語", auto: "自動", ok: "OK",
+      score: "スコア", leaderboard: "ランキング", next: "ネクスト", noRecords: "まだ記録がありません",
+      gameOver: "ゲームオーバー", scoreLabel: "スコア: {score}", restart: "リスタート",
+      tipAim: "撃ちたい方向へ<b>ドラッグ</b>して、<br><b>指を離そう</b>！",
+      tipMerge: "<b>同じ動物</b>同士をぶつけて合体させよう！",
+      tipPraise: "<b>ナイス合体！</b><br>どんどん合体してハイスコアを狙おう。",
+      tipDanger: "注意！<b class=\"danger\">赤いゾーン</b>に動物がいるとタイマーが進むよ。<br>いっぱいになる前に押し出そう！",
+    },
+    "zh-CN": {
+      settings: "设置", soundEffects: "音效", volume: "音量",
+      language: "语言", auto: "自动", ok: "确定",
+      score: "分数", leaderboard: "排行榜", next: "下一个", noRecords: "暂无记录",
+      gameOver: "游戏结束", scoreLabel: "分数：{score}", restart: "重新开始",
+      tipAim: "朝想要发射的方向<b>拖动</b>，<br>然后<b>松开</b>！",
+      tipMerge: "让<b>相同的小动物</b>相撞来合并它们！",
+      tipPraise: "<b>合并得好！</b><br>继续合并，冲击高分。",
+      tipDanger: "小心！小动物停在<b class=\"danger\">红色区域</b>会让计时器增长。<br>在计满之前把它撞出去！",
+    },
+    "zh-TW": {
+      settings: "設定", soundEffects: "音效", volume: "音量",
+      language: "語言", auto: "自動", ok: "確定",
+      score: "分數", leaderboard: "排行榜", next: "下一個", noRecords: "尚無紀錄",
+      gameOver: "遊戲結束", scoreLabel: "分數：{score}", restart: "重新開始",
+      tipAim: "朝想發射的方向<b>拖曳</b>，<br>然後<b>放開</b>！",
+      tipMerge: "讓<b>相同的小動物</b>相撞來合併牠們！",
+      tipPraise: "<b>合併得好！</b><br>繼續合併，挑戰高分。",
+      tipDanger: "小心！小動物停在<b class=\"danger\">紅色區域</b>會讓計時器增加。<br>在計滿之前把牠撞出去！",
+    },
+    "es": {
+      settings: "Ajustes", soundEffects: "Efectos de sonido", volume: "Volumen",
+      language: "Idioma", auto: "Automático", ok: "Aceptar",
+      score: "Puntos", leaderboard: "Clasificación", next: "Siguiente", noRecords: "Aún no hay récords",
+      gameOver: "FIN DEL JUEGO", scoreLabel: "Puntos: {score}", restart: "Reiniciar",
+      tipAim: "¡<b>Arrastra</b> hacia donde quieras disparar<br>y <b>suelta</b>!",
+      tipMerge: "¡Choca <b>animalitos iguales</b> para fusionarlos!",
+      tipPraise: "<b>¡Buena fusión!</b><br>Sigue fusionando para lograr una gran puntuación.",
+      tipDanger: "¡Cuidado! Un animalito en la <b class=\"danger\">zona roja</b> llena el temporizador.<br>¡Sácalo antes de que se llene!",
+    },
+    "pt": {
+      settings: "Configurações", soundEffects: "Efeitos sonoros", volume: "Volume",
+      language: "Idioma", auto: "Automático", ok: "OK",
+      score: "Pontos", leaderboard: "Placar", next: "Próximo", noRecords: "Nenhum recorde ainda",
+      gameOver: "FIM DE JOGO", scoreLabel: "Pontos: {score}", restart: "Reiniciar",
+      tipAim: "<b>Arraste</b> na direção em que quer atirar<br>e <b>solte</b>!",
+      tipMerge: "Bata <b>bichinhos iguais</b> para juntá-los!",
+      tipPraise: "<b>Boa fusão!</b><br>Continue juntando para uma pontuação alta.",
+      tipDanger: "Cuidado! Um bichinho na <b class=\"danger\">zona vermelha</b> enche o cronômetro.<br>Tire-o de lá antes que encha!",
+    },
+    "fr": {
+      settings: "Paramètres", soundEffects: "Effets sonores", volume: "Volume",
+      language: "Langue", auto: "Automatique", ok: "OK",
+      score: "Score", leaderboard: "Classement", next: "Suivant", noRecords: "Aucun record pour l'instant",
+      gameOver: "PARTIE TERMINÉE", scoreLabel: "Score : {score}", restart: "Rejouer",
+      tipAim: "<b>Fais glisser</b> vers l'endroit où tu veux tirer,<br>puis <b>relâche</b> !",
+      tipMerge: "Fais se cogner les <b>bestioles identiques</b> pour les fusionner !",
+      tipPraise: "<b>Belle fusion !</b><br>Continue pour faire un gros score.",
+      tipDanger: "Attention ! Une bestiole dans la <b class=\"danger\">zone rouge</b> remplit le chrono.<br>Éjecte-la avant qu'il soit plein !",
+    },
+    "de": {
+      settings: "Einstellungen", soundEffects: "Soundeffekte", volume: "Lautstärke",
+      language: "Sprache", auto: "Automatisch", ok: "OK",
+      score: "Punkte", leaderboard: "Bestenliste", next: "Nächstes", noRecords: "Noch keine Rekorde",
+      gameOver: "SPIEL VORBEI", scoreLabel: "Punkte: {score}", restart: "Neustart",
+      tipAim: "<b>Ziehe</b> in die Richtung, in die du schießen willst,<br>und <b>lass los</b>!",
+      tipMerge: "Stoße <b>gleiche Tierchen</b> zusammen, um sie zu verschmelzen!",
+      tipPraise: "<b>Super verschmolzen!</b><br>Mach weiter für einen Highscore.",
+      tipDanger: "Vorsicht! Ein Tierchen in der <b class=\"danger\">roten Zone</b> füllt den Timer.<br>Stoß es raus, bevor er voll ist!",
+    },
+    "it": {
+      settings: "Impostazioni", soundEffects: "Effetti sonori", volume: "Volume",
+      language: "Lingua", auto: "Automatica", ok: "OK",
+      score: "Punteggio", leaderboard: "Classifica", next: "Prossimo", noRecords: "Ancora nessun record",
+      gameOver: "GAME OVER", scoreLabel: "Punteggio: {score}", restart: "Ricomincia",
+      tipAim: "<b>Trascina</b> verso dove vuoi tirare,<br>poi <b>rilascia</b>!",
+      tipMerge: "Fai scontrare gli <b>animaletti uguali</b> per unirli!",
+      tipPraise: "<b>Bella fusione!</b><br>Continua a unire per un punteggio alto.",
+      tipDanger: "Attenzione! Un animaletto nella <b class=\"danger\">zona rossa</b> riempie il timer.<br>Buttalo fuori prima che sia pieno!",
+    },
+    "ru": {
+      settings: "Настройки", soundEffects: "Звуковые эффекты", volume: "Громкость",
+      language: "Язык", auto: "Авто", ok: "ОК",
+      score: "Очки", leaderboard: "Рекорды", next: "Далее", noRecords: "Рекордов пока нет",
+      gameOver: "ИГРА ОКОНЧЕНА", scoreLabel: "Очки: {score}", restart: "Заново",
+      tipAim: "<b>Потяни</b> туда, куда хочешь выстрелить,<br>и <b>отпусти</b>!",
+      tipMerge: "Сталкивай <b>одинаковых зверушек</b>, чтобы объединить их!",
+      tipPraise: "<b>Отличное слияние!</b><br>Продолжай, чтобы набрать больше очков.",
+      tipDanger: "Осторожно! Зверушка в <b class=\"danger\">красной зоне</b> заполняет таймер.<br>Выбей её, пока он не заполнился!",
+    },
+    "tr": {
+      settings: "Ayarlar", soundEffects: "Ses efektleri", volume: "Ses düzeyi",
+      language: "Dil", auto: "Otomatik", ok: "Tamam",
+      score: "Skor", leaderboard: "Sıralama", next: "Sıradaki", noRecords: "Henüz rekor yok",
+      gameOver: "OYUN BİTTİ", scoreLabel: "Skor: {score}", restart: "Yeniden başla",
+      tipAim: "Atmak istediğin yöne <b>sürükle</b>,<br>sonra <b>bırak</b>!",
+      tipMerge: "Birleştirmek için <b>aynı hayvancıkları</b> çarpıştır!",
+      tipPraise: "<b>Harika birleştirme!</b><br>Yüksek skor için devam et.",
+      tipDanger: "Dikkat! <b class=\"danger\">Kırmızı bölgedeki</b> hayvancık sayacı doldurur.<br>Dolmadan onu dışarı it!",
+    },
+    "pl": {
+      settings: "Ustawienia", soundEffects: "Efekty dźwiękowe", volume: "Głośność",
+      language: "Język", auto: "Automatycznie", ok: "OK",
+      score: "Wynik", leaderboard: "Ranking", next: "Następny", noRecords: "Brak rekordów",
+      gameOver: "KONIEC GRY", scoreLabel: "Wynik: {score}", restart: "Zagraj ponownie",
+      tipAim: "<b>Przeciągnij</b> w stronę, w którą chcesz strzelić,<br>i <b>puść</b>!",
+      tipMerge: "Zderzaj <b>takie same zwierzaki</b>, aby je połączyć!",
+      tipPraise: "<b>Świetne połączenie!</b><br>Łącz dalej, by zdobyć wysoki wynik.",
+      tipDanger: "Uwaga! Zwierzak w <b class=\"danger\">czerwonej strefie</b> napełnia licznik.<br>Wybij go, zanim się zapełni!",
+    },
+    "nl": {
+      settings: "Instellingen", soundEffects: "Geluidseffecten", volume: "Volume",
+      language: "Taal", auto: "Automatisch", ok: "OK",
+      score: "Score", leaderboard: "Ranglijst", next: "Volgende", noRecords: "Nog geen records",
+      gameOver: "GAME OVER", scoreLabel: "Score: {score}", restart: "Opnieuw",
+      tipAim: "<b>Sleep</b> naar waar je wilt schieten<br>en <b>laat los</b>!",
+      tipMerge: "Bots <b>gelijke diertjes</b> tegen elkaar om ze samen te voegen!",
+      tipPraise: "<b>Mooi samengevoegd!</b><br>Ga door voor een hoge score.",
+      tipDanger: "Pas op! Een diertje in de <b class=\"danger\">rode zone</b> vult de timer.<br>Stoot het eruit voordat hij vol is!",
+    },
+    "id": {
+      settings: "Pengaturan", soundEffects: "Efek suara", volume: "Volume",
+      language: "Bahasa", auto: "Otomatis", ok: "OK",
+      score: "Skor", leaderboard: "Peringkat", next: "Berikutnya", noRecords: "Belum ada rekor",
+      gameOver: "PERMAINAN SELESAI", scoreLabel: "Skor: {score}", restart: "Main Lagi",
+      tipAim: "<b>Seret</b> ke arah yang ingin kamu tembak,<br>lalu <b>lepaskan</b>!",
+      tipMerge: "Tabrakkan <b>hewan yang sama</b> untuk menggabungkannya!",
+      tipPraise: "<b>Gabungan hebat!</b><br>Terus gabungkan untuk skor tinggi.",
+      tipDanger: "Awas! Hewan di <b class=\"danger\">zona merah</b> mengisi pengatur waktu.<br>Singkirkan sebelum penuh!",
+    },
+    "vi": {
+      settings: "Cài đặt", soundEffects: "Hiệu ứng âm thanh", volume: "Âm lượng",
+      language: "Ngôn ngữ", auto: "Tự động", ok: "OK",
+      score: "Điểm", leaderboard: "Bảng xếp hạng", next: "Tiếp theo", noRecords: "Chưa có kỷ lục",
+      gameOver: "KẾT THÚC", scoreLabel: "Điểm: {score}", restart: "Chơi lại",
+      tipAim: "<b>Kéo</b> về hướng bạn muốn bắn,<br>rồi <b>thả tay</b>!",
+      tipMerge: "Cho <b>các con vật giống nhau</b> va vào nhau để ghép chúng!",
+      tipPraise: "<b>Ghép hay lắm!</b><br>Tiếp tục ghép để đạt điểm cao.",
+      tipDanger: "Cẩn thận! Con vật trong <b class=\"danger\">vùng đỏ</b> sẽ làm đầy đồng hồ.<br>Đẩy nó ra trước khi đầy!",
+    },
+    "th": {
+      settings: "ตั้งค่า", soundEffects: "เสียงเอฟเฟกต์", volume: "ระดับเสียง",
+      language: "ภาษา", auto: "อัตโนมัติ", ok: "ตกลง",
+      score: "คะแนน", leaderboard: "อันดับ", next: "ถัดไป", noRecords: "ยังไม่มีสถิติ",
+      gameOver: "จบเกม", scoreLabel: "คะแนน: {score}", restart: "เล่นใหม่",
+      tipAim: "<b>ลาก</b>ไปทางที่ต้องการยิง<br>แล้ว<b>ปล่อย</b>!",
+      tipMerge: "ชน<b>สัตว์ที่เหมือนกัน</b>เข้าด้วยกันเพื่อรวมร่าง!",
+      tipPraise: "<b>รวมได้ดีมาก!</b><br>รวมต่อไปเพื่อคะแนนสูง ๆ",
+      tipDanger: "ระวัง! สัตว์ใน<b class=\"danger\">โซนสีแดง</b>จะทำให้ตัวจับเวลาเต็มขึ้น<br>ชนมันออกไปก่อนจะเต็ม!",
+    },
+  };
+
+  // "en-US" -> "en", "zh-Hant-HK" -> "zh-TW", "pt-BR" -> "pt"; null if
+  // we don't ship that language.
+  function matchLanguage(tag){
+    if (typeof tag !== "string" || !tag) return null;
+    const t = tag.toLowerCase().replace(/_/g, "-");
+    if (t.startsWith("zh")) return /hant|-tw|-hk|-mo/.test(t) ? "zh-TW" : "zh-CN";
+    const base = t.split("-")[0];
+    return STRINGS[base] ? base : null;
+  }
+  function detectLanguage(){
+    if (settings.lang !== "auto" && STRINGS[settings.lang]) return settings.lang;
+    try{
+      const q = matchLanguage(new URLSearchParams(location.search).get("lang"));
+      if (q) return q;
+    } catch(e){}
+    const cg = matchLanguage(CG.locale);
+    if (cg) return cg;
+    const prefs = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
+    for (const l of prefs){ const m = matchLanguage(l); if (m) return m; }
+    return "en";
+  }
+
+  Object.assign(STRINGS.en, { playGamesAccountHelp: "Manage your game account in device settings: Google ? All services ? Play Games.", vibration: "Vibration", playGamesSignIn: "Sign in to Play Games", playGamesAccount: "Device account settings", playGamesOffline: "Not signed in", playGamesSetup: "Play Games setup pending", playGamesError: "Could not connect to Play Games. Please try again.", playGamesConnected: "Play Games: {name}" });
+  Object.assign(STRINGS.ko, { playGamesAccountHelp: "?? ??: ?? ?? ? Google ? ?? ??? ? Play ???? ?????.", vibration: "??", playGamesSignIn: "Play Games ???", playGamesAccount: "?? ?? ??", playGamesOffline: "????? ??", playGamesSetup: "Play Games ?? ?? ?? ?", playGamesError: "Play Games? ???? ?????. ?? ??????.", playGamesConnected: "Play Games: {name}" });
+  Object.assign(STRINGS.en, { privacyPolicy: "Privacy Policy", close: "Close" });
+  Object.assign(STRINGS.ko, { privacyPolicy: "개인정보처리방침", close: "닫기" });
+  const privacyDialog = document.getElementById("privacyDialog");
+  document.getElementById("btnPrivacy").addEventListener("click", () => privacyDialog.showModal());
+  document.getElementById("btnPrivacyClose").addEventListener("click", () => privacyDialog.close());
+  let currentLang = "en";
+  function t(key, vars){
+    let s = (STRINGS[currentLang] && STRINGS[currentLang][key]) ?? STRINGS.en[key] ?? key;
+    if (vars) for (const k in vars) s = s.split(`{${k}}`).join(String(vars[k]));
+    return s;
+  }
+
+  const languageSelectEl = document.getElementById("languageSelect");
+  function buildLanguageSelect(){
+    languageSelectEl.innerHTML = "";
+    const opts = [["auto", t("auto")], ...Object.entries(LANGUAGES)];
+    for (const [code, name] of opts){
+      const o = document.createElement("option");
+      o.value = code;
+      o.textContent = name;
+      languageSelectEl.appendChild(o);
+    }
+    languageSelectEl.value = STRINGS[settings.lang] ? settings.lang : "auto";
+  }
+
+  function applyLanguage(){
+    currentLang = detectLanguage();
+    document.documentElement.lang = currentLang;
+    for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
+    for (const attr of ["title", "alt", "aria-label"]){
+      for (const el of document.querySelectorAll(`[data-i18n-${attr}]`)) el.setAttribute(attr, t(el.getAttribute(`data-i18n-${attr}`)));
+    }
+    buildLanguageSelect();
+    // Re-render anything built from strings in JS (functions declared
+    // further down; hoisted).
+    renderLeaderboard();
+    refreshTip();
+  }
+
+  languageSelectEl.addEventListener("change", () => {
+    settings.lang = languageSelectEl.value;
+    saveSettings();
+    applyLanguage();
+  });
+
+  // ---------------------------------------------------------------------
+  // Background music — bgm.mp3, looped continuously behind the game.
+  // ---------------------------------------------------------------------
+  const bgmAudio = new Audio("bgm.mp3");
+  bgmAudio.loop = true;
+  bgmAudio.volume = effectiveVolume();
+  bgmAudio.muted = bgmAudio.volume === 0;
+
+  // ---------------------------------------------------------------------
+  // Audio — sample SFX from sounds/ (Kenney, CC0), with WebAudio-synthesized
+  // fallbacks: a squeaky-rubber "boop" for a plain bounce,
+  // and a bubbly water "pop" for a merge. Created lazily on first user
+  // gesture (pointerdown) to satisfy autoplay policies.
+  // ---------------------------------------------------------------------
+  let audioCtx = null;
+  let masterGain = null;
+  function ensureAudio(){
+    if (!audioCtx){
+      const Ctor = window.AudioContext || window.webkitAudioContext;
+      if (!Ctor) return null;
+      audioCtx = new Ctor();
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = effectiveVolume();
+      masterGain.connect(audioCtx.destination);
+      loadSfx();
+    }
+    if (audioCtx.state !== "running") audioCtx.resume(); // "suspended" or iOS "interrupted"
+    if (bgmAudio.paused && !gameOver) bgmAudio.play().catch(() => {});
+    return audioCtx;
+  }
+
+  // Sample SFX — Kenney CC0 packs (see sounds/LICENSE.txt). Decoded into
+  // AudioBuffers once the AudioContext exists; until a buffer is ready (or
+  // if loading/decoding fails) the synthesized
+  // fallbacks below are used instead.
+  const SFX_FILES = {
+    collision: [0, 1, 2, 3, 4].map(i => `sounds/collision_${i}.mp3`),
+    merge: ["sounds/merge.mp3"],
+    gameover: ["sounds/gameover.mp3"],
+  };
+  const sfxBuffers = { collision: [], merge: [], gameover: [] };
+  function loadSfx(){
+    for (const [key, urls] of Object.entries(SFX_FILES)){
+      for (const url of urls){
+        fetch(url)
+          .then(r => r.arrayBuffer())
+          .then(ab => new Promise((res, rej) => audioCtx.decodeAudioData(ab, res, rej)))
+          .then(buf => sfxBuffers[key].push(buf))
+          .catch(() => {});
+      }
+    }
+  }
+  // Plays a random buffer from the set; returns false if none are loaded.
+  function playSample(key, gainValue, rate){
+    const list = sfxBuffers[key];
+    if (!list.length) return false;
+    const src = audioCtx.createBufferSource();
+    src.buffer = list[Math.floor(Math.random() * list.length)];
+    src.playbackRate.value = rate || 1;
+    const gain = audioCtx.createGain();
+    gain.gain.value = gainValue;
+    src.connect(gain); gain.connect(masterGain);
+    src.start();
+    return true;
+  }
+
+  // The jingle is a soft pizzicato that the BGM drowns out, so the music
+  // stops for the game-over screen (restartGame() starts it again) and the
+  // jingle is boosted (its peak is only ~0.5).
+  function playGameOverSound(){
+    bgmAudio.pause();
+    if (!ensureAudio()) return;
+    playSample("gameover", 1.8, 1);
+  }
+
+  let lastCollisionSoundT = -1, lastMergeSoundT = -1;
+  const SOUND_MIN_GAP = 0.035; // seconds — keeps a pile-up of simultaneous
+                                // collisions from turning into distorted mush
+
+  function playCollisionSound(level){
+    const ac = ensureAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime;
+    if (t0 - lastCollisionSoundT < SOUND_MIN_GAP) return;
+    lastCollisionSoundT = t0;
+
+    // Soft impact thud — bigger slimes thud a bit lower.
+    if (playSample("collision", 1.0, 1.15 - Math.min(level, 10) * 0.04)) return;
+
+    // Fallback: squeaky rubber tube-float "boop" — bigger slimes squeak lower.
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = "triangle";
+    const baseFreq = 620 - Math.min(level, 10) * 28;
+    osc.frequency.setValueAtTime(baseFreq * 1.5, t0);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(80, baseFreq * 0.7), t0 + 0.09);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.13);
+    osc.connect(gain); gain.connect(masterGain);
+    osc.start(t0); osc.stop(t0 + 0.15);
+  }
+
+  function playMergeSound(level){
+    const ac = ensureAudio();
+    if (!ac) return;
+    const t0 = ac.currentTime;
+    if (t0 - lastMergeSoundT < SOUND_MIN_GAP) return;
+    lastMergeSoundT = t0;
+
+    // Rising "level up" blip, pitched up a little for higher-level merges.
+    if (playSample("merge", 1.0, 0.9 + Math.min(level, 10) * 0.05)) return;
+
+    // Fallback: short filtered noise "plip" (water pop)...
+    const bufSize = Math.max(1, Math.floor(ac.sampleRate * 0.06));
+    const buffer = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / bufSize);
+    const noise = ac.createBufferSource();
+    noise.buffer = buffer;
+    const noiseFilter = ac.createBiquadFilter();
+    noiseFilter.type = "bandpass";
+    noiseFilter.frequency.value = 1100;
+    noiseFilter.Q.value = 0.7;
+    const noiseGain = ac.createGain();
+    noiseGain.gain.setValueAtTime(0.22, t0);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.06);
+    noise.connect(noiseFilter); noiseFilter.connect(noiseGain); noiseGain.connect(masterGain);
+    noise.start(t0);
+
+    // ...plus a rising bubbly chime, pitched up for higher-level merges.
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = "sine";
+    const baseFreq = 320 + Math.min(level, 10) * 34;
+    osc.frequency.setValueAtTime(baseFreq, t0);
+    osc.frequency.exponentialRampToValueAtTime(baseFreq * 2.1, t0 + 0.18);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.28, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.3);
+    osc.connect(gain); gain.connect(masterGain);
+    osc.start(t0); osc.stop(t0 + 0.32);
+  }
+
+  // ---------------------------------------------------------------------
+  // Color helpers
+  // ---------------------------------------------------------------------
+  function hexToRgb(hex){
+    const h = hex.replace("#","");
+    return { r: parseInt(h.substr(0,2),16), g: parseInt(h.substr(2,2),16), b: parseInt(h.substr(4,2),16) };
+  }
+  function rgbToCss(c, a){ return `rgba(${c.r},${c.g},${c.b},${a===undefined?1:a})`; }
+  function shade(hex, amt){
+    // amt > 0 lightens toward white, amt < 0 darkens toward black
+    const c = hexToRgb(hex);
+    const t = amt > 0 ? 255 : 0;
+    const p = Math.abs(amt);
+    return {
+      r: Math.round(c.r + (t - c.r) * p),
+      g: Math.round(c.g + (t - c.g) * p),
+      b: Math.round(c.b + (t - c.b) * p),
+    };
+  }
+  function mixColor(hexA, hexB, t){
+    const a = hexToRgb(hexA), b = hexToRgb(hexB);
+    return { r: a.r + (b.r-a.r)*t, g: a.g + (b.g-a.g)*t, b: a.b + (b.b-a.b)*t };
+  }
+
+  // ---------------------------------------------------------------------
+  // Canvas / logical-viewport setup
+  // The play field ("pool") is a FIXED size, always — it no longer
+  // grows/shrinks with the browser window or its aspect ratio (that used
+  // to be project.godot's stretch mode "canvas_items" + aspect "expand",
+  // which let the logical viewport expand to fill whatever space was
+  // left over). Now we just fit BASE_W×BASE_H at a constant scale (the
+  // smaller of the two ratios) and letterbox/pillarbox any leftover space
+  // around it — the pool itself never changes size or shape.
+  // ---------------------------------------------------------------------
+  // BASE_W kept the same as the old square field; BASE_H is derived from
+  // images/BG2.png's own aspect ratio (2569x3061, a tall winding track —
+  // not square) so the art maps onto the field with one uniform scale and
+  // no cropping/distortion, same principle the old square field used with
+  // images/BG.png (see drawPoolFrame()).
+  const BG2_NATIVE_W = 2569, BG2_NATIVE_H = 3061;
+  const BASE_W = 1825, BASE_H = Math.round(BASE_W * BG2_NATIVE_H / BG2_NATIVE_W);
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+
+  // viewW/viewH stay pinned to BASE_W/BASE_H (kept as separate variables
+  // since the rest of the code already reads them generically); offsetX/Y
+  // are the CSS-pixel letterbox offset used to center the fixed-size field
+  // in whatever window it's shown in.
+  let cssW = 0, cssH = 0, DPR = 1, scale = 1, viewW = BASE_W, viewH = BASE_H;
+  let offsetX = 0, offsetY = 0;
+  // Logical area that must stay on screen: the field, grown to include the
+  // evolution guide once the outline is known (see updateFitBox()).
+  let fitBox = { x0: 0, y0: 0, x1: BASE_W, y1: BASE_H };
+
+  // Two layout modes for the DOM side panels (score/leaderboard, next):
+  // "side" sits them left/right of the pool in the pillarbox space that
+  // opens up once the fixed-size square pool is scaled to fit; "top" moves
+  // them into a reserved strip above the pool instead, for windows tall/
+  // narrow enough (portrait phones, etc.) that the pillarbox gutter is too
+  // thin for the panels to fit beside the pool without overlapping it.
+  const SIDE_GUTTER_MIN = 220; // css px — min pillarbox width the side panels need
+  const TOP_BAR_MARGIN = 16;   // css px gap left between the panels and the pool top edge
+  let layoutMode = "side";
+
+  // Reads an element's actual rendered bottom edge (css px from the
+  // viewport top), even if it currently has the "hidden" class — briefly
+  // unhiding to measure and restoring immediately, so the reserved "top"
+  // layout strip always matches the panels' real content height instead of
+  // a guessed constant (guessed constants drift out of sync whenever the
+  // panel markup/styling changes and start overlapping the pool again).
+  function measuredBottom(el){
+    const wasHidden = el.classList.contains("hidden");
+    if (wasHidden) el.classList.remove("hidden");
+    const bottom = el.getBoundingClientRect().bottom;
+    if (wasHidden) el.classList.add("hidden");
+    return bottom;
+  }
+
+  function resize(){
+    cssW = window.innerWidth;
+    cssH = window.innerHeight;
+    if (cssW < 1 || cssH < 1) return; // pane not laid out yet (0 size) — keep previous valid geometry
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.style.width = cssW + "px";
+    canvas.style.height = cssH + "px";
+    canvas.width = Math.round(cssW * DPR);
+    canvas.height = Math.round(cssH * DPR);
+
+    // Fit the field plus anything drawn around it (the evolution guide
+    // sits outside the ring, past the field's edges) — see fitBox.
+    const fitW = fitBox.x1 - fitBox.x0, fitH = fitBox.y1 - fitBox.y0;
+    const scaleWide = Math.min(cssW / fitW, cssH / fitH); // fit, never expand
+    const sideGutter = (cssW - fitW * scaleWide) / 2;
+    layoutMode = sideGutter >= SIDE_GUTTER_MIN ? "side" : "top";
+    document.body.classList.toggle("layout-top", layoutMode === "top");
+
+    if (layoutMode === "side"){
+      scale = scaleWide;
+      offsetX = sideGutter - fitBox.x0 * scale;
+      offsetY = (cssH - fitH * scale) / 2 - fitBox.y0 * scale;
+    } else {
+      // Panels are now styled per body.layout-top (class just toggled
+      // above), so measuring their bottoms here reflects the real "top"
+      // layout, not the vertically-centered "side" one.
+      const topBarH = Math.max(measuredBottom(leftPanelEl), measuredBottom(rightPanelEl)) + TOP_BAR_MARGIN;
+      const availH = Math.max(cssH - topBarH, 50);
+      scale = Math.min(cssW / fitW, availH / fitH);
+      offsetX = (cssW - fitW * scale) / 2 - fitBox.x0 * scale;
+      offsetY = topBarH + (availH - fitH * scale) / 2 - fitBox.y0 * scale;
+    }
+
+    layoutForViewport();
+    bgCacheDirty = true; // canvas size/transform changed — see rebuildBgCache()
+    tipSize = null;      // tip max-width depends on the viewport — see setTip()
+  }
+
+  function toLogical(clientX, clientY){
+    const rect = canvas.getBoundingClientRect();
+    return { x: (clientX - rect.left - offsetX) / scale, y: (clientY - rect.top - offsetY) / scale };
+  }
+
+  // ---------------------------------------------------------------------
+  // Physics constants (mirrors slime.tscn PhysicsMaterial + project.godot)
+  // ---------------------------------------------------------------------
+  const WALL_SOUND_MIN_SPEED = 60; // px/s into the wall needed for a thud
+  const COLLISION_FX_MIN_SPEED = 60; // px/s closing speed needed for a bounce's score/particles/sound
+  const BOUNCE = 0.8;         // physics_material_override.bounce (friction=0, combine=max)
+  const FIXED_DT = 1 / 120;
+  const MAX_STEPS_PER_FRAME = 6;
+
+  // Main.tscn's original danger_radius (50) was sized for the old, much
+  // smaller level-1 slime (radius 40). It was later scaled up ~2.6x for the
+  // old square pool's much bigger level-1 slime, then scaled back down here
+  // for BG2.png's narrow track (see SIZE_SCALE) — kept just under the local
+  // clearance at the launcher anchor (~55 field px, from the track's alpha
+  // mask) so the danger ring reads as a tight zone right at the track's end
+  // instead of bleeding out past its edges.
+  const DANGER_RADIUS = 126; // 42 x3
+  // Launcher anchor: near the bottom of the ring's interior, at the
+  // lowest point with ~150 field px of clearance (DANGER_RADIUS + margin) from the ring (found by
+  // scanning BG2.png's interior distance field upward from its bottom) —
+  // as fractions of BASE_W/BASE_H so it keeps working if the field size
+  // ever changes. There's no "wall" rectangle to inset from; the launcher
+  // just sits at a fixed point inside the pool.
+  const LAUNCHER_ANCHOR_FX = 1034 / BG2_NATIVE_W, LAUNCHER_ANCHOR_FY = 2678 / BG2_NATIVE_H;
+  let launcherPos = { x: BASE_W * LAUNCHER_ANCHOR_FX, y: BASE_H * LAUNCHER_ANCHOR_FY };
+  const SHOOT_FORCE = 800.0;
+  const MAX_DRAG = 200.0;
+  const GAME_OVER_WAIT = 5.0; // seconds
+
+  function layoutForViewport(){
+    launcherPos = { x: viewW * LAUNCHER_ANCHOR_FX, y: viewH * LAUNCHER_ANCHOR_FY };
+  }
+
+  // ---------------------------------------------------------------------
+  // Slime entity (Scripts/slime.gd)
+  // ---------------------------------------------------------------------
+  // The character art (images/*.png) draws its tube-float ring with some
+  // padding inside the square canvas — the ring doesn't reach the image's
+  // edges — so the physics collider is shrunk from the drawn size to
+  // match where the ring actually is, instead of the full image bounds.
+  const COLLIDER_SCALE = 0.84; // 0.8 bumped up ~5%
+  let nextId = 1;
+  function makeSlime(level, x, y, vx, vy){
+    const data = getSlimeData(level);
+    // Idle cute tilt: each slime keeps a slow constant spin of its own so it
+    // never sits perfectly upright. Collisions kick `spin` faster and it
+    // relaxes back down to `idleSpin` over time (see updateSlimeAnim).
+    const idleSpin = (0.15 + Math.random() * 0.35) * (Math.random() < 0.5 ? -1 : 1);
+    const visualRadius = data.size / 2.0;
+    return {
+      id: nextId++,
+      level,
+      x, y,
+      vx, vy,
+      radius: visualRadius * COLLIDER_SCALE, // physics collider — see COLLIDER_SCALE note above
+      visualRadius,                          // drawn (image) size, unaffected by the collider shrink
+      mass: 1.0,
+      isMerging: false,
+      spawnAt: now(),
+      angle: Math.random() * Math.PI * 2,
+      idleSpin,
+      spin: idleSpin,
+    };
+  }
+
+  let slimes = [];
+
+  function spawnSlimeAt(x, y, level, vx, vy){
+    const s = makeSlime(level, x, y, vx || 0, vy || 0);
+    slimes.push(s);
+    return s;
+  }
+
+  // ---------------------------------------------------------------------
+  // Launcher state (Scripts/launcher.gd)
+  // ---------------------------------------------------------------------
+  const launcher = {
+    isDragging: false,
+    dragPos: { x: 0, y: 0 },
+    nextLevel: 1,    // the critter sitting on the launcher, fired next
+    queueLevel: 0,   // the one after that (shown in the "Next" panel); 0 = not rolled yet
+    loadedAt: 0,     // when nextLevel was loaded onto the launcher (pop-in anim)
+    previewAngle: 0, // current rock angle of the launcher critter, handed to the shot slime
+    canShoot: true,
+    dangerElapsed: 0,
+    dangerActive: false,
+  };
+
+  function rollLevel(){ return 1 + Math.floor(Math.random() * 2); } // randi_range(1,2)
+
+  // Advances the queue: the "Next" critter moves onto the launcher and a new
+  // one is rolled for the panel.
+  function prepareNextSlime(){
+    launcher.nextLevel = launcher.queueLevel || rollLevel();
+    launcher.queueLevel = rollLevel();
+    launcher.loadedAt = now();
+    updateNextPreview();
+  }
+
+  // Returns false when the drag was too short to count as a shot.
+  function shootSlime(){
+    const dx = launcher.dragPos.x - launcherPos.x;
+    const dy = launcher.dragPos.y - launcherPos.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 10.0) return false;
+    const dirX = dx / len, dirY = dy / len;
+    const power = Math.min(len, MAX_DRAG) / MAX_DRAG;
+    const s = spawnSlimeAt(launcherPos.x, launcherPos.y, launcher.nextLevel, 0, 0);
+    // It was already visible on the launcher — keep its pose and skip the
+    // spawn pop so the shot reads as the same critter leaving.
+    s.angle = launcher.previewAngle;
+    s.spawnAt = now() - 1000;
+    // apply_central_impulse(impulse) with mass 1 -> velocity += impulse
+    s.vx = dirX * SHOOT_FORCE * power;
+    s.vy = dirY * SHOOT_FORCE * power;
+    spawnRipple(launcherPos.x, launcherPos.y);
+    return true;
+  }
+
+  // ---------------------------------------------------------------------
+  // Score UI state — score is shown in the left side panel (DOM), with a
+  // quick CSS "bump" animation on change standing in for main.gd's old
+  // score bounce tween.
+  // ---------------------------------------------------------------------
+  // Several collisions can score within one frame (up to 6 physics steps),
+  // and each DOM update forces a reflow to restart the bump animation — so
+  // changes only mark the score dirty and flushScore() applies them once
+  // per frame.
+  let scoreDirty = false;
+  function onScoreChanged(){ scoreDirty = true; }
+  function flushScore(){
+    if (!scoreDirty) return;
+    scoreDirty = false;
+    scoreValueEl.textContent = String(GameManager.currentScore);
+    scoreValueEl.classList.remove("bump");
+    void scoreValueEl.offsetWidth; // reflow to restart the animation
+    scoreValueEl.classList.add("bump");
+  }
+
+  // ---------------------------------------------------------------------
+  // Leaderboard — top scores, saved via Store. Rendered into
+  // both the inline list (left side panel, "side" layout) and the popup
+  // list (opened via the leaderboard button in "top" layout) — whichever
+  // one is actually visible, the other just stays offscreen/hidden.
+  // ---------------------------------------------------------------------
+  const LEADERBOARD_KEY = "catMergeLeaderboard";
+  const LEADERBOARD_MAX = 5;
+  function loadLeaderboard(){
+    try{
+      const raw = Store.get(LEADERBOARD_KEY);
+      const parsed = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(parsed)) return parsed.filter(n => typeof n === "number");
+    } catch(e){ /* ignore corrupt save */ }
+    return [];
+  }
+  let leaderboard = []; // filled by loadSaves()
+  function saveLeaderboard(){
+    Store.set(LEADERBOARD_KEY, JSON.stringify(leaderboard));
+  }
+  function renderLeaderboardInto(el){
+    el.innerHTML = "";
+    if (!leaderboard.length){
+      const li = document.createElement("li");
+      li.className = "empty";
+      li.textContent = t("noRecords");
+      el.appendChild(li);
+      return;
+    }
+    leaderboard.forEach((score, i) => {
+      const li = document.createElement("li");
+      const rank = document.createElement("span");
+      rank.textContent = `${i + 1}.`;
+      const val = document.createElement("span");
+      val.textContent = String(score);
+      li.appendChild(rank);
+      li.appendChild(val);
+      el.appendChild(li);
+    });
+  }
+  function renderLeaderboard(){
+    renderLeaderboardInto(leaderboardListEl);
+    renderLeaderboardInto(leaderboardListModalEl);
+  }
+  function submitScoreToLeaderboard(score){
+    if (score <= 0) return;
+    if (leaderboard.length > 0 && score > leaderboard[0]) CG.happytime(); // new best
+    leaderboard.push(score);
+    leaderboard.sort((a, b) => b - a);
+    leaderboard = leaderboard.slice(0, LEADERBOARD_MAX);
+    saveLeaderboard();
+    renderLeaderboard();
+    submitPlayGamesScore(score);
+  }
+
+  // ---------------------------------------------------------------------
+  // Game over state (main.gd _on_game_over / game_over_screen.gd)
+  // ---------------------------------------------------------------------
+  let gameOver = false;
+  let restartBtnRect = null;
+  let restartPressedVisual = false;
+
+  function triggerGameOver(){
+    if (gameOver) return;
+    gameOver = true;
+    CG.setPlaying(false);
+    document.body.classList.add("game-over");
+    playGameOverSound();
+    submitScoreToLeaderboard(GameManager.currentScore);
+  }
+
+  function restartGame(){
+    slimes = [];
+    GameManager.currentScore = 0;
+    onScoreChanged();
+    gameOver = false;
+    document.body.classList.remove("game-over");
+    launcher.isDragging = false;
+    launcher.canShoot = true;
+    launcher.dangerElapsed = 0;
+    launcher.dangerActive = false;
+    ripples.length = 0;
+    pops.length = 0;
+    particles.length = 0;
+    launcher.queueLevel = 0;
+    prepareNextSlime();
+    CG.setPlaying(uiState === "playing");
+    if (audioCtx && bgmAudio.paused) bgmAudio.play().catch(() => {});
+  }
+
+  // ---------------------------------------------------------------------
+  // Small ripple FX on shoot (purely cosmetic)
+  // ---------------------------------------------------------------------
+  const ripples = [];
+  function spawnRipple(x, y){ ripples.push({ x, y, t: 0 }); }
+  function updateRipples(dt){
+    for (let i = ripples.length - 1; i >= 0; i--){
+      ripples[i].t += dt;
+      if (ripples[i].t > 0.5) ripples.splice(i, 1);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Physics step
+  // ---------------------------------------------------------------------
+  function physicsStep(dt){
+    if (gameOver) return;
+
+    // --- Danger-zone detection (Launcher._physics_process) ---
+    let slimeInDanger = false;
+    for (const s of slimes){
+      const d = Math.hypot(s.x - launcherPos.x, s.y - launcherPos.y);
+      if (d < DANGER_RADIUS + s.radius){ slimeInDanger = true; break; }
+    }
+    if (slimeInDanger){
+      launcher.canShoot = false;
+      if (launcher.isDragging) launcher.isDragging = false;
+      launcher.dangerActive = true;
+      launcher.dangerElapsed += dt;
+      if (launcher.dangerElapsed >= GAME_OVER_WAIT){
+        triggerGameOver();
+        return;
+      }
+    } else {
+      launcher.canShoot = true;
+      launcher.dangerActive = false;
+      launcher.dangerElapsed = 0;
+    }
+
+    // --- Integrate ---
+    for (const s of slimes){ s.x += s.vx * dt; s.y += s.vy * dt; }
+
+    // --- Wall collisions (BG2.png's track shape, via its distance field —
+    // see buildTrackMask()/sampleTrackDistance() above; no straight walls
+    // anymore, so this replaces the old 4-way rectangle clamp) ---
+    if (trackReady) for (const s of slimes){
+      const d = sampleTrackDistance(s.x, s.y);
+      if (d < s.radius){
+        const n = sampleTrackNormal(s.x, s.y); // points away from the nearest wall, into the track
+        s.x += n.x * (s.radius - d);
+        s.y += n.y * (s.radius - d);
+        const vn = s.vx * n.x + s.vy * n.y;
+        if (vn < 0){ // only reflect while still moving into the wall
+          s.vx -= (1 + BOUNCE) * vn * n.x;
+          s.vy -= (1 + BOUNCE) * vn * n.y;
+          // Same tangential-slide spin convention as the pairwise collision
+          // response below (tangent = normal rotated 90°).
+          spinKick(s, s.vx * -n.y + s.vy * n.x);
+          // Bumping the pool edge makes the same thud (skip gentle grazes
+          // so resting/sliding critters don't buzz).
+          if (-vn > WALL_SOUND_MIN_SPEED) playCollisionSound(s.level);
+        }
+      }
+    }
+
+    // --- Pairwise circle collisions + merge detection ---
+    const toSpawn = [];
+    const n = slimes.length;
+    for (let i = 0; i < n; i++){
+      const a = slimes[i];
+      if (a.isMerging) continue;
+      for (let j = i + 1; j < n; j++){
+        const b = slimes[j];
+        if (b.isMerging) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const minDist = a.radius + b.radius;
+        if (dx * dx + dy * dy >= minDist * minDist) continue;
+
+        if (a.level === b.level){
+          // slime.gd::_on_body_entered -> merge_with
+          a.isMerging = true;
+          b.isMerging = true;
+          const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+          const totalMass = a.mass + b.mass;
+          const fvx = (a.mass * a.vx + b.mass * b.vx) / totalMass;
+          const fvy = (a.mass * a.vy + b.mass * b.vy) / totalMass;
+          const nextLevel = a.level + 1;
+          // Two deer (the last friend) merging just vanish — no next level.
+          if (a.level < DEER_LEVEL && SLIME_DATA[nextLevel]){
+            toSpawn.push({ x: midX, y: midY, level: nextLevel, vx: fvx, vy: fvy });
+            pulseEvolution(nextLevel);
+          } else pulseEvolution(a.level);
+          const mergeScore = getSlimeData(a.level).score;
+          GameManager.addScore(mergeScore);
+          spawnPop(midX, midY, getSlimeData(a.level).color);
+          spawnMergeParticles(midX, midY, mergeScore);
+          playMergeSound(a.level);
+          triggerHapticFeedback(a.level);
+          tutorialOnMerge();
+          break; // a is now merging, stop checking it against further partners
+        } else {
+          const dist = Math.hypot(dx, dy) || 0.0001;
+          // Elastic collision response (equal masses, restitution BOUNCE)
+          const nx = dx / dist, ny = dy / dist;
+          const overlap = minDist - dist;
+          const push = overlap / 2;
+          a.x -= nx * push; a.y -= ny * push;
+          b.x += nx * push; b.y += ny * push;
+
+          const rvx = b.vx - a.vx, rvy = b.vy - a.vy;
+          const velAlongNormal = rvx * nx + rvy * ny;
+          if (velAlongNormal < 0){
+            const invMassSum = 1 / a.mass + 1 / b.mass;
+            const j = -(1 + BOUNCE) * velAlongNormal / invMassSum;
+            const jx = j * nx, jy = j * ny;
+            a.vx -= jx / a.mass; a.vy -= jy / a.mass;
+            b.vx += jx / b.mass; b.vy += jy / b.mass;
+
+            // Spin them in opposite directions based on how much they were
+            // sliding past each other (tangential to the collision normal)
+            // — a glancing hit makes them twirl.
+            const tx = -ny, ty = nx;
+            const tangentialRel = rvx * tx + rvy * ty;
+            spinKick(a, -tangentialRel);
+            spinKick(b, tangentialRel);
+
+            // Plain bounces score too now, just a small amount — the big
+            // payouts stay reserved for merges. Gentle contacts (critters
+            // jostling in a crowded pool) are skipped, same as wall grazes,
+            // so a pile-up doesn't spam score/particles/sound every step.
+            if (-velAlongNormal > COLLISION_FX_MIN_SPEED){
+              GameManager.addScore(COLLISION_SCORE);
+              spawnCollisionParticles((a.x + b.x) / 2, (a.y + b.y) / 2);
+              playCollisionSound(Math.min(a.level, b.level));
+            }
+          }
+        }
+      }
+    }
+
+    if (toSpawn.length){
+      for (const spec of toSpawn) spawnSlimeAt(spec.x, spec.y, spec.level, spec.vx, spec.vy);
+    }
+    if (slimes.some(s => s.isMerging)) slimes = slimes.filter(s => !s.isMerging);
+
+    updateSlimeAnim(dt);
+    updateRipples(dt);
+  }
+
+  // ---------------------------------------------------------------------
+  // Cute idle tilt + collision spin (purely cosmetic, no effect on the
+  // physics bodies' actual size/position used for collision).
+  // ---------------------------------------------------------------------
+  const SPIN_RELAX = 2.2;      // 1/s — how fast `spin` eases back to `idleSpin`
+  const SPIN_MAX = 8.0;        // rad/s clamp so a hard hit can't blur-spin
+  const SPIN_KICK_SCALE = 0.016;
+
+  function spinKick(s, tangentialSpeed){
+    // Spin faster in a direction based on how it was sliding at impact.
+    s.spin += tangentialSpeed * SPIN_KICK_SCALE;
+    if (s.spin > SPIN_MAX) s.spin = SPIN_MAX;
+    if (s.spin < -SPIN_MAX) s.spin = -SPIN_MAX;
+  }
+
+  function updateSlimeAnim(dt){
+    for (const s of slimes){
+      s.angle += s.spin * dt;
+      s.spin += (s.idleSpin - s.spin) * SPIN_RELAX * dt;
+    }
+  }
+
+  // Spawn-pop micro animation (purely cosmetic "cute" polish)
+  const pops = [];
+  function spawnPop(x, y, color){ pops.push({ x, y, color, t: 0 }); }
+  function updatePops(dt){
+    for (let i = pops.length - 1; i >= 0; i--){
+      pops[i].t += dt;
+      if (pops[i].t > 0.35) pops.splice(i, 1);
+    }
+  }
+
+  // Impact particles — small white bursts for plain bounces, slightly
+  // bigger blue bursts for merges.
+  const particles = [];
+  const MAX_PARTICLES = 300;
+  function spawnParticleBurst(x, y, count, color, baseRadius, speed){
+    count = Math.min(count, MAX_PARTICLES - particles.length);
+    for (let i = 0; i < count; i++){
+      const angle = Math.random() * Math.PI * 2;
+      const spd = speed * (0.5 + Math.random() * 0.5);
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * spd,
+        vy: Math.sin(angle) * spd,
+        t: 0,
+        life: 0.35 + Math.random() * 0.2,
+        radius: baseRadius * (0.7 + Math.random() * 0.6),
+        color
+      });
+    }
+  }
+  function spawnCollisionParticles(x, y){
+    spawnParticleBurst(x, y, 8, "#ffffff", 6, 1400);
+  }
+  // More particles for bigger merges — level 1's score (10) is the baseline,
+  // and each doubling of score (i.e. each level up) adds a few more.
+  function spawnMergeParticles(x, y, score){
+    const count = Math.round(12 + Math.log2(Math.max(score, 10) / 10) * 3);
+    spawnParticleBurst(x, y, count, "#3aa0ff", 9, 3000);
+  }
+  function updateParticles(dt){
+    for (let i = particles.length - 1; i >= 0; i--){
+      const p = particles[i];
+      p.t += dt;
+      if (p.t > p.life){ particles.splice(i, 1); continue; }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.9;
+      p.vy *= 0.9;
+    }
+  }
+  function drawParticles(){
+    for (const p of particles){
+      ctx.globalAlpha = Math.max(0, 1 - p.t / p.life);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ease-out-back style pop, 0 -> 1 with a little overshoot
+  function popScale(age, dur){
+    if (age >= dur) return 1;
+    const t = age / dur;
+    const c = 1.7;
+    const tt = t - 1;
+    return 1 + (tt*tt*((c+1)*tt + c));
+  }
+  function spawnScaleFor(s){ return popScale((now() - s.spawnAt) / 1000, 0.18); }
+
+  // ---------------------------------------------------------------------
+  // Track floor: images/BG2.png drawn once over the fixed viewW×viewH
+  // field (see the "Map/track art" section above — no nine-slice needed).
+  // BG2.png is a peanut-shaped ring around an open interior, so it's drawn
+  // on top of drawWater()'s sea (see render()) — the ring frames the water
+  // and covers the water mask's soft edge.
+  // ---------------------------------------------------------------------
+  function drawPoolFrame(t){
+    if (frameCache){
+      blitLayer(frameCache);
+    } else if (bgImage.complete && bgImage.naturalWidth > 0){
+      // A soft glow following the image's own alpha silhouette — canvas
+      // shadows render around whatever's opaque, so this traces the
+      // track's curved edges for free without extracting a contour path.
+      ctx.save();
+      ctx.shadowColor = "rgba(255,255,255,0.6)";
+      ctx.shadowBlur = 18;
+      ctx.drawImage(bgImage, 0, 0, viewW, viewH);
+      ctx.restore();
+      ctx.save();
+      ctx.shadowColor = "rgba(6,40,58,0.45)";
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 4;
+      ctx.drawImage(bgImage, 0, 0, viewW, viewH);
+      ctx.restore();
+    } else {
+      // Fallback fill while images/BG2.png is still loading.
+      ctx.save();
+      ctx.fillStyle = "#e2b98a";
+      ctx.fillRect(0, 0, viewW, viewH);
+      ctx.restore();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Static background cache. The sea gradient (masked to the pool) and the
+  // ring art with its two shadow passes never move, but redrawing them from
+  // the full-size BG2.png every frame cost ~16ms — most of a 60fps frame
+  // budget. They're rendered once into canvases matching the main canvas's
+  // physical size/transform and just blitted each frame; rebuilt whenever
+  // resize() changes the canvas or the track mask finishes loading.
+  // ---------------------------------------------------------------------
+  let waterBaseCache = null, frameCache = null, poolClipPath = null;
+  let bgCacheDirty = true;
+
+  function makeLayer(){
+    const c = document.createElement("canvas");
+    c.width = canvas.width;
+    c.height = canvas.height;
+    const g = c.getContext("2d");
+    g.setTransform(scale * DPR, 0, 0, scale * DPR, offsetX * DPR, offsetY * DPR);
+    return { c, g };
+  }
+
+  function blitLayer(layer){
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(layer, 0, 0);
+    ctx.restore();
+  }
+
+  // Only called once trackReady (which implies bgImage has loaded).
+  function rebuildBgCache(){
+    bgCacheDirty = false;
+
+    // A proper sea fill (not just a faint tint) — deep tropical blue-teal,
+    // near-opaque so the interior clearly reads as open water, clipped to
+    // the ring's interior (waterMaskCanvas, built in buildTrackMask()).
+    // The ring art is drawn over this afterward, hiding the mask's soft edge.
+    const water = makeLayer();
+    const grad = water.g.createLinearGradient(0, 0, 0, viewH);
+    grad.addColorStop(0, "#7fdcea");
+    grad.addColorStop(0.45, "#2ea9d6");
+    grad.addColorStop(1, "#0c5f8c");
+    water.g.fillStyle = grad;
+    water.g.fillRect(0, 0, viewW, viewH);
+    water.g.globalCompositeOperation = "destination-in";
+    water.g.imageSmoothingEnabled = true;
+    water.g.drawImage(waterMaskCanvas, 0, 0, viewW, viewH);
+    waterBaseCache = water.c;
+
+    // Ring art with a soft glow + drop shadow following the image's own
+    // alpha silhouette — canvas shadows render around whatever's opaque,
+    // so this traces the track's curved edges without a contour path.
+    const frame = makeLayer();
+    frame.g.save();
+    frame.g.shadowColor = "rgba(255,255,255,0.6)";
+    frame.g.shadowBlur = 18;
+    frame.g.drawImage(bgImage, 0, 0, viewW, viewH);
+    frame.g.restore();
+    frame.g.save();
+    frame.g.shadowColor = "rgba(6,40,58,0.45)";
+    frame.g.shadowBlur = 10;
+    frame.g.shadowOffsetY = 4;
+    frame.g.drawImage(bgImage, 0, 0, viewW, viewH);
+    frame.g.restore();
+    frameCache = frame.c;
+
+    // Clip for the animated water FX: the ring's outer edge. Anything that
+    // spills past the interior lands under the ring art drawn on top.
+    poolClipPath = new Path2D();
+    if (poolOutline){
+      poolOutline.pts.forEach((p, i) => i ? poolClipPath.lineTo(p.x, p.y) : poolClipPath.moveTo(p.x, p.y));
+      poolClipPath.closePath();
+    } else {
+      poolClipPath.rect(0, 0, viewW, viewH);
+    }
+  }
+
+  function drawWater(t){
+    // Nothing to layer FX on until the track mask exists (drawPoolFrame
+    // shows a flat fallback fill for that brief window).
+    if (!trackReady || !waterBaseCache) return;
+    blitLayer(waterBaseCache);
+
+    ctx.save();
+    ctx.clip(poolClipPath);
+
+    // gentle drifting highlight streaks (vector-clean "waves")
+    ctx.globalAlpha = 0.28;
+    ctx.strokeStyle = "#ffffff";
+    ctx.lineWidth = 3;
+    for (let i = 0; i < 5; i++){
+      const yOff = viewH * ((i + 0.5) / 5);
+      const amp = 10 + (i % 2) * 6;
+      const speed = 0.35 + i * 0.05;
+      ctx.beginPath();
+      for (let x = 0; x <= viewW; x += 14){
+        const y = yOff + Math.sin((x * 0.02) + t * speed + i) * amp;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+
+    // ripples from shot slimes
+    for (const r of ripples){
+      const p = r.t / 0.5;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, 14 + p * 60, 0, Math.PI*2);
+      ctx.strokeStyle = `rgba(255,255,255,${0.35 * (1 - p)})`;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+    // merge "pop" flashes
+    for (const p of pops){
+      const t2 = p.t / 0.35;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 8 + t2 * 46, 0, Math.PI*2);
+      ctx.strokeStyle = rgbToCss(hexToRgb(p.color), 0.5 * (1 - t2));
+      ctx.lineWidth = 4;
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------------
+  // Slime rendering — cute round-eyed pool "tube float"
+  // ---------------------------------------------------------------------
+  const WATER_MID = "#4fbfdd";
+  function drawSlime(s){
+    const scale = spawnScaleFor(s);
+    const r = s.visualRadius * scale; // drawn (image) size — see COLLIDER_SCALE note on makeSlime
+    if (r <= 0) return;
+    const data = getSlimeData(s.level);
+    const base = data.color;
+    const img = getSlimeSprite(s.level, r * 2);
+
+    ctx.save();
+    ctx.translate(s.x, s.y);
+    ctx.rotate(s.angle); // idle cute tilt, sped up briefly by collisions
+
+    if (img && (img.width > 0) && (img.complete === undefined || img.complete && img.naturalWidth > 0)){
+      // character art already includes its own pool-float ring
+      const d = r * 2;
+      ctx.drawImage(img, -r, -r, d, d);
+    } else {
+      // fallback while the image is still loading: plain tube-float ring
+      // sized to the (smaller) physics collider, same as the real ring
+      const fr = s.radius * scale;
+      ctx.beginPath();
+      ctx.arc(0, 0, fr, 0, Math.PI*2);
+      ctx.fillStyle = base;
+      ctx.fill();
+      ctx.lineWidth = Math.max(2, fr * 0.07);
+      ctx.strokeStyle = rgbToCss(shade(base, -0.35));
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------------
+  // Launcher visuals (danger zone, aim line, next-slime preview)
+  // ---------------------------------------------------------------------
+  function drawLauncher(tSec){
+    ctx.save();
+    ctx.translate(launcherPos.x, launcherPos.y);
+
+    // Danger zone: fills in with an ever-deeper red the longer a slime has
+    // been sitting in it, so the 5-second game-over countdown (GAME_OVER_WAIT)
+    // reads visually as "the zone is turning red" rather than a hidden timer.
+    let dangerAlpha = 0.1;
+    let progress = 0;
+    if (launcher.dangerActive){
+      progress = Math.min(1, launcher.dangerElapsed / GAME_OVER_WAIT);
+      dangerAlpha = 0.1 + progress * 0.7;
+    }
+    const dangerGreen = Math.round(60 * (1 - progress));
+    ctx.beginPath();
+    ctx.arc(0, 0, DANGER_RADIUS, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(255,${dangerGreen},${dangerGreen},${dangerAlpha})`;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(255,${dangerGreen},${dangerGreen},${0.5 + progress * 0.5})`;
+    ctx.stroke();
+
+    // Countdown pie: a clockwise progress sweep from the top that fills the
+    // whole danger zone (not just its edge), completing a full circle exactly
+    // as GAME_OVER_WAIT elapses — the actual "5 seconds of process" made
+    // visible as a filling wedge, like a pie-chart timer.
+    if (launcher.dangerActive && progress > 0){
+      ctx.beginPath();
+      const startAngle = -Math.PI / 2;
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, DANGER_RADIUS, startAngle, startAngle + Math.PI * 2 * progress);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(255,20,20,0.55)";
+      ctx.fill();
+    }
+
+    // Aim vector: the real drag, or the tutorial hand's demo drag.
+    let aim = null;
+    if (launcher.isDragging) aim = { x: launcher.dragPos.x - launcherPos.x, y: launcher.dragPos.y - launcherPos.y, ghost: false };
+    else if (tutorial.ghost) aim = { x: tutorial.ghost.x, y: tutorial.ghost.y, ghost: true };
+    if (aim && Math.hypot(aim.x, aim.y) <= 10.0) aim = null;
+
+    const critterR = drawLauncherCritter(tSec, aim);
+
+    if (aim){
+      const len = Math.hypot(aim.x, aim.y);
+      const start = Math.min(critterR * 0.85, len);
+      ctx.beginPath();
+      ctx.setLineDash([8, 6]);
+      ctx.moveTo(aim.x / len * start, aim.y / len * start);
+      ctx.lineTo(aim.x, aim.y);
+      ctx.strokeStyle = aim.ghost ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.6)";
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.restore();
+  }
+
+  // The critter waiting on the launcher (launcher.nextLevel): bobs gently
+  // (no aim-direction stretch — it keeps its shape while aiming). Drawn
+  // in launcher-local space (drawLauncher already translated). Returns the
+  // drawn radius so the aim line can start at its edge.
+  function drawLauncherCritter(tSec, aim){
+    if (gameOver) return 0;
+    const r = getSlimeData(launcher.nextLevel).size / 2;
+    const img = getSlimeSprite(launcher.nextLevel, r * 2 * 1.2);
+    if (!img || !img.width || img.complete === false || img.naturalWidth === 0) return 0;
+
+    const rock = Math.sin(tSec * 2.2) * 0.1;
+    launcher.previewAngle = rock;
+    const pop = popScale((now() - launcher.loadedAt) / 1000, 0.25);
+    const bob = 1 + Math.sin(tSec * 3) * 0.03;
+
+    ctx.save();
+    // Dimmed while the danger zone is occupied (can't shoot yet).
+    ctx.globalAlpha = launcher.canShoot ? 1 : 0.35;
+    ctx.scale(bob * pop, bob * pop);
+    ctx.rotate(rock);
+    ctx.drawImage(img, -r, -r, r * 2, r * 2);
+    ctx.restore();
+    return r * pop;
+  }
+
+  // ---------------------------------------------------------------------
+  // Score + Game Over UI
+  // ---------------------------------------------------------------------
+  function drawGameOver(){
+    ctx.save();
+
+    const cx = viewW / 2, cy = viewH / 2;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // Translated strings vary a lot in length, so each line shrinks its
+    // font as needed to stay within the pool width / button.
+    const maxTextW = Math.min(viewW, BASE_W) - 160;
+    fitFont("800", 128, t("gameOver"), maxTextW);
+    ctx.fillStyle = "#ff5e64";
+    ctx.fillText(t("gameOver"), cx, cy - 220);
+
+    const scoreText = t("scoreLabel", { score: GameManager.currentScore });
+    fitFont("600", 84, scoreText, maxTextW);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(scoreText, cx, cy - 40);
+
+    const btnW = 560, btnH = 152;
+    const bx = cx - btnW/2, by = cy + 100;
+    restartBtnRect = { x: bx, y: by, w: btnW, h: btnH };
+    ctx.beginPath();
+    roundRectPath(bx, by, btnW, btnH, 30);
+    ctx.fillStyle = restartPressedVisual ? "#2bade0" : "#33ccff";
+    ctx.fill();
+    fitFont("700", 80, t("restart"), btnW - 60);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(t("restart"), cx, by + btnH/2 + 4);
+
+    ctx.textAlign = "left";
+    ctx.restore();
+  }
+
+  function fitFont(weight, size, text, maxW){
+    const family = "-apple-system, 'Segoe UI', sans-serif";
+    ctx.font = `${weight} ${size}px ${family}`;
+    const w = ctx.measureText(text).width;
+    if (w > maxW) ctx.font = `${weight} ${Math.floor(size * maxW / w)}px ${family}`;
+  }
+
+  function roundRectPath(x, y, w, h, r){
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  // ---------------------------------------------------------------------
+  // Main loop
+  // ---------------------------------------------------------------------
+  function now(){ return performance.now(); }
+  let lastT = null, accumulator = 0;
+
+  // Opt in with ?perf=1. Bounded samples, no per-frame console/DOM writes.
+  const perfEnabled = new URLSearchParams(location.search).get("perf") === "1";
+  const perfSamples = [];
+  if (perfEnabled) window.gamePerformance = {
+    reset(){ perfSamples.length = 0; },
+    summary(){
+      const metric = key => {
+        const values = perfSamples.map(s => s[key]).sort((a, b) => a - b);
+        return values.length ? { mean: values.reduce((a, b) => a + b, 0) / values.length,
+          p95: values[Math.ceil(values.length * 0.95) - 1] } : null;
+      };
+      return { samples: perfSamples.length, frameMs: metric("frameMs"),
+        physicsMs: metric("physicsMs"), renderMs: metric("renderMs"),
+        steps: metric("steps"), slimes: metric("slimes"), particles: metric("particles") };
+    }
+  };
+  let frameRequest = null;
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden){
+      cancelAnimationFrame(frameRequest);
+      frameRequest = null;
+    } else if (frameRequest === null){
+      lastT = null;
+      accumulator = 0;
+      frameRequest = requestAnimationFrame(frame);
+    }
+  });
+
+  function frame(t){
+    if (document.hidden){ frameRequest = null; return; }
+    const started = perfEnabled ? now() : 0;
+    if (lastT === null) lastT = t;
+    let dt = (t - lastT) / 1000;
+    const frameMs = dt * 1000;
+    lastT = t;
+    dt = Math.min(dt, 1/20);
+
+    // Physics only advances while actually playing — paused behind the
+    // main menu / settings overlay (the water/frame still render for a
+    // pretty idle background, they just don't move the game forward).
+    let steps = 0;
+    if (uiState === "playing"){
+      accumulator += dt;
+      while (accumulator >= FIXED_DT && steps < MAX_STEPS_PER_FRAME){
+        physicsStep(FIXED_DT);
+        updatePops(FIXED_DT);
+        updateParticles(FIXED_DT);
+        accumulator -= FIXED_DT;
+        steps++;
+      }
+    }
+
+    const physicsEnded = perfEnabled ? now() : 0;
+
+    flushScore();
+    updateTutorial(t / 1000);
+    const renderStarted = perfEnabled ? now() : 0;
+    render(t / 1000);
+    if (perfEnabled && frameMs > 0){
+      if (perfSamples.length === 600) perfSamples.shift();
+      perfSamples.push({ frameMs, physicsMs: physicsEnded - started,
+        renderMs: now() - renderStarted, steps, slimes: slimes.length, particles: particles.length });
+    }
+    frameRequest = requestAnimationFrame(frame);
+  }
+
+  // ---------------------------------------------------------------------
+  // Evolution guide — the merge order (fox -> ... -> deer) laid out along
+  // the pool's outer edge, just outside the ring, growing in size like the
+  // critters themselves. The newest level made by a merge pulses.
+  // EVO_FROM/EVO_TO are the arc's ends, as fractions of the outline's
+  // length measured clockwise from its topmost point (negative = before it).
+  // ---------------------------------------------------------------------
+  const EVO_FROM = -0.1, EVO_TO = 0.1;
+  const EVO_GAP = 22;                         // field px between ring edge and icon
+  const evoRadius = (i) => 58 + i * 8;        // icon radius per step (fractional ok), smallest first
+  const evoPulseAt = {};                      // level -> time it was last made by a merge
+  function pulseEvolution(level){ evoPulseAt[level] = now(); }
+
+  let evolutionStopCache = null;
+  let evolutionStopOutline = null;
+  function evolutionStops(){
+    if (evolutionStopOutline === poolOutline && evolutionStopCache) return evolutionStopCache;
+    const count = SLIME_IMAGE_NAMES.length;
+    const s0 = EVO_FROM * poolOutline.total, s1 = EVO_TO * poolOutline.total;
+    const stops = [];
+    for (let i = 0; i < count; i++){
+      const r = evoRadius(i);
+      const p = outlineAt(s0 + (s1 - s0) * (i / (count - 1)));
+      stops.push({ x: p.x + p.nx * (EVO_GAP + r), y: p.y + p.ny * (EVO_GAP + r), r });
+    }
+    evolutionStopOutline = poolOutline;
+    evolutionStopCache = stops;
+    return stops;
+  }
+
+  // Grows fitBox to cover the guide (with room for the merge pulse), then
+  // refits the view. Called once the outline has been traced.
+  function updateFitBox(){
+    const pad = 1.3;
+    let { x0, y0, x1, y1 } = { x0: 0, y0: 0, x1: BASE_W, y1: BASE_H };
+    for (const st of evolutionStops()){
+      x0 = Math.min(x0, st.x - st.r * pad); x1 = Math.max(x1, st.x + st.r * pad);
+      y0 = Math.min(y0, st.y - st.r * pad); y1 = Math.max(y1, st.y + st.r * pad);
+    }
+    fitBox = { x0, y0, x1, y1 };
+    resize();
+  }
+
+  function drawEvolutionGuide(){
+    if (!poolOutline) return;
+    const count = SLIME_IMAGE_NAMES.length;
+    const stops = evolutionStops();
+
+    ctx.save();
+    // Chevrons between neighbors, pointing toward the next level.
+    for (let i = 0; i < count - 1; i++){
+      const a = stops[i], b = stops[i + 1];
+      const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1;
+      const ux = dx / d, uy = dy / d;
+      const mid = a.r + (d - a.r - b.r) / 2; // centered in the gap between the two icons
+      const cx = a.x + ux * mid, cy = a.y + uy * mid;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(Math.atan2(uy, ux));
+      ctx.beginPath();
+      ctx.moveTo(-9, -14); ctx.lineTo(7, 0); ctx.lineTo(-9, 14);
+      ctx.lineWidth = 8;
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "#0f8fc4";
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.imageSmoothingQuality = "high";
+    for (let i = 0; i < count; i++){
+      const st = stops[i], level = i + 1;
+      const age = evoPulseAt[level] ? (now() - evoPulseAt[level]) / 1000 : Infinity;
+      const pulse = age < 0.6 ? Math.sin((age / 0.6) * Math.PI) : 0;
+      const r = st.r * (1 + 0.25 * pulse);
+
+      const img = getSlimeSprite(level, r * 2 * 0.95);
+      if (img && img.width && img.complete !== false && img.naturalWidth !== 0){
+        const d = r * 2 * 0.95;
+        ctx.drawImage(img, st.x - d / 2, st.y - d / 2, d, d);
+      }
+    }
+    ctx.restore();
+  }
+
+  function render(tSec){
+    // Clear the WHOLE physical canvas first (identity transform) — the
+    // fixed-size field is letterboxed/pillarboxed now, so there's often
+    // space outside it (which just shows #stage's CSS background) that
+    // the logical-space clear below wouldn't reach.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(scale * DPR, 0, 0, scale * DPR, offsetX * DPR, offsetY * DPR);
+
+    if (bgCacheDirty && trackReady) rebuildBgCache();
+    drawWater(tSec);
+    drawPoolFrame(tSec);
+    drawEvolutionGuide();
+    drawLauncher(tSec);
+    for (const s of slimes) drawSlime(s);
+    drawParticles();
+    if (gameOver){
+      // Dim the WHOLE physical canvas (identity transform), not just the
+      // logical pool viewport — otherwise the letterbox/pillarbox space
+      // around the pool stays bright. save()/restore() around the identity
+      // transform preserves the logical transform for drawGameOver() below.
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = "rgba(13,13,26,0.85)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.restore();
+      drawGameOver();
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Input (Pointer Events unify mouse + touch, like Godot's
+  // InputEventMouseButton / InputEventScreenTouch handling in launcher.gd)
+  // ---------------------------------------------------------------------
+  function onPointerDown(clientX, clientY){
+    if (uiState !== "playing") return;
+    if (gameOver){
+      // Any tap/click anywhere on screen restarts, not just the button.
+      restartPressedVisual = true;
+      return;
+    }
+    if (!launcher.canShoot) return;
+    launcher.isDragging = true;
+    const p = toLogical(clientX, clientY);
+    launcher.dragPos = p;
+  }
+  function onPointerMove(clientX, clientY){
+    if (uiState !== "playing") return;
+    if (gameOver || !launcher.isDragging) return;
+    launcher.dragPos = toLogical(clientX, clientY);
+  }
+  function onPointerUp(clientX, clientY){
+    if (uiState !== "playing") return;
+    if (gameOver){
+      if (restartPressedVisual){
+        restartGame();
+        restartPressedVisual = false;
+      }
+      return;
+    }
+    if (launcher.isDragging){
+      launcher.dragPos = toLogical(clientX, clientY);
+      launcher.isDragging = false;
+      // A tap without a real drag doesn't fire — and doesn't reroll the
+      // launcher critter either.
+      if (shootSlime()){
+        prepareNextSlime();
+        tutorialOnShot();
+      }
+    }
+  }
+
+  canvas.addEventListener("pointerdown", (e) => { ensureAudio(); canvas.setPointerCapture(e.pointerId); onPointerDown(e.clientX, e.clientY); });
+  canvas.addEventListener("pointermove", (e) => onPointerMove(e.clientX, e.clientY));
+  canvas.addEventListener("pointerup", (e) => onPointerUp(e.clientX, e.clientY));
+  canvas.addEventListener("pointercancel", () => { launcher.isDragging = false; restartPressedVisual = false; });
+
+  window.addEventListener("resize", resize);
+
+  // ---------------------------------------------------------------------
+  // Tutorial — shown on the first run only (flag saved via Store):
+  //   "aim"    a hand demos dragging from the launcher critter, until the
+  //            player's first real shot;
+  //   "merge"  a tip shows matching critters merge, until the first merge;
+  //   "praise" a short "nice!" confirmation, then done.
+  // Separately, the first time a critter lingers in the danger zone, a
+  // one-off hint explains the red timer.
+  // ---------------------------------------------------------------------
+  const TUTORIAL_KEY = "catMergeTutorialDone";
+  const DANGER_HINT_KEY = "catMergeDangerHintDone";
+  function loadFlag(key){ return Store.get(key) === "1"; }
+  function saveFlag(key){ Store.set(key, "1"); }
+
+  // step/dangerHintDone are read from the save in loadSaves().
+  const tutorial = {
+    step: "done",
+    stepAt: 0,
+    dangerHintDone: true,
+    dangerHintOn: false,
+    ghost: null, // demo drag vector (launcher-local) drawn by drawLauncher while the hand is "pressed"
+  };
+
+  function tutorialOnShot(){
+    if (tutorial.step === "aim"){ tutorial.step = "merge"; tutorial.stepAt = now(); }
+  }
+  function tutorialOnMerge(){
+    if (tutorial.step === "merge"){ tutorial.step = "praise"; tutorial.stepAt = now(); }
+  }
+
+  const tutorialTipEl = document.getElementById("tutorialTip");
+  const tutorialHandEl = document.getElementById("tutorialHand");
+  const tipImg = (name) => `<img src="images/${name}.png" alt="">`;
+  const TIP_HTML = {
+    aim: () => t("tipAim"),
+    merge: () => `<div class="tip-merge-row">${tipImg(SLIME_IMAGE_NAMES[0])}+${tipImg(SLIME_IMAGE_NAMES[0])}→${tipImg(SLIME_IMAGE_NAMES[1])}</div>`
+         + t("tipMerge"),
+    praise: () => t("tipPraise"),
+    danger: () => t("tipDanger"),
+  };
+  let tipKey = null;
+  // Bubble's measured size, cached so setTip() doesn't read offsetWidth
+  // right after updateHand()'s style writes (a forced layout every frame).
+  // Cleared whenever the content or viewport changes.
+  let tipSize = null;
+  // Forces setTip() to rebuild the bubble on its next call (language change).
+  function refreshTip(){ tipKey = null; tutorialTipEl.classList.remove("show"); }
+
+  // Logical (pool) coords -> CSS px on screen.
+  function toScreen(x, y){ return { x: offsetX + x * scale, y: offsetY + y * scale }; }
+
+  function setTip(key){
+    if (key !== tipKey){
+      if (key) tutorialTipEl.innerHTML = TIP_HTML[key]();
+      tutorialTipEl.classList.toggle("show", !!key);
+      tipKey = key;
+      tipSize = null;
+    }
+    if (!key) return;
+    // Anchored above the launcher, clamped to stay fully on screen.
+    const a = toScreen(launcherPos.x, launcherPos.y - DANGER_RADIUS * 4.6);
+    if (!tipSize) tipSize = { w: tutorialTipEl.offsetWidth, h: tutorialTipEl.offsetHeight };
+    const { w, h } = tipSize;
+    const x = Math.min(Math.max(a.x, 16 + w / 2), cssW - 16 - w / 2);
+    const y = Math.max(a.y, h + 8);
+    tutorialTipEl.style.transform = `translate(${x - w / 2}px, ${y - h}px)`;
+  }
+
+  // Demo drag loop (seconds): fade in on the critter, press, drag up
+  // toward open water, hold, release, fade out, pause.
+  const HAND_CYCLE = 2.6;
+  const HAND_TARGET = { x: 90, y: -300 }; // launcher-local, into the pool
+  function easeInOut(t){ return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2; }
+  function updateHand(tSec, show){
+    if (!show){ tutorialHandEl.style.opacity = "0"; return; }
+    const t = tSec % HAND_CYCLE;
+    let k = 0, opacity = 1, press = 0;
+    if (t < 0.25){ opacity = t / 0.25; }
+    else if (t < 0.45){ press = (t - 0.25) / 0.2; }
+    else if (t < 1.35){ press = 1; k = easeInOut((t - 0.45) / 0.9); }
+    else if (t < 1.6){ press = 1; k = 1; }
+    else if (t < 1.8){ press = 1 - (t - 1.6) / 0.2; k = 1; }
+    else if (t < 2.2){ k = 1; opacity = 1 - (t - 1.8) / 0.4; }
+    else { opacity = 0; }
+    const lx = HAND_TARGET.x * k, ly = HAND_TARGET.y * k;
+    if (press > 0.5 && k > 0) tutorial.ghost = { x: lx, y: ly };
+    const p = toScreen(launcherPos.x + lx, launcherPos.y + ly);
+    // Sized relative to the pool (full size at a ~720px-tall desktop view)
+    // so it doesn't swamp the critter on small phone screens.
+    const size = Math.min(1.2, Math.max(0.6, scale / 0.33));
+    // 26/3.5 = fingertip offset inside the 56x70 hand (see #tutorialHand)
+    tutorialHandEl.style.transform = `translate(${p.x - 26}px, ${p.y - 3.5}px) scale(${size * (1 - 0.15 * press)})`;
+    tutorialHandEl.style.opacity = String(opacity);
+  }
+
+  function updateTutorial(tSec){
+    const active = uiState === "playing" && !gameOver;
+    tutorial.ghost = null;
+    let tip = null;
+
+    if (active){
+      if (tutorial.step === "aim") tip = "aim";
+      else if (tutorial.step === "merge") tip = "merge";
+      else if (tutorial.step === "praise"){
+        tip = "praise";
+        if (now() - tutorial.stepAt > 2200){ tutorial.step = "done"; saveFlag(TUTORIAL_KEY); tip = null; }
+      }
+    }
+
+    if (active && !tutorial.dangerHintDone && launcher.dangerActive && launcher.dangerElapsed > 0.8) tutorial.dangerHintOn = true;
+    if (tutorial.dangerHintOn){
+      if (active && launcher.dangerActive) tip = "danger";
+      else { tutorial.dangerHintOn = false; tutorial.dangerHintDone = true; saveFlag(DANGER_HINT_KEY); }
+    }
+
+    updateHand(tSec, active && tutorial.step === "aim" && !launcher.isDragging && launcher.canShoot);
+    setTip(tip);
+  }
+
+  // ---------------------------------------------------------------------
+  // Settings / leaderboard UI wiring (Scripts equivalent: none in the
+  // original Godot project — new for the web port). There's no main menu:
+  // CrazyGames wants new players landed straight in gameplay, so the game
+  // goes "loading" -> "playing" on its own once the SDK and saves are in.
+  // ---------------------------------------------------------------------
+  let uiState = "loading"; // "loading" | "playing" | "settings" | "leaderboard"
+
+  const settingsEl = document.getElementById("settingsScreen");
+  const btnSettingsClose = document.getElementById("btnSettingsClose");
+  const soundToggleEl = document.getElementById("soundToggle");
+  const volumeSliderEl = document.getElementById("volumeSlider");
+  const btnInGameSettings = document.getElementById("btnInGameSettings");
+  const leftPanelEl = document.getElementById("leftPanel");
+  const rightPanelEl = document.getElementById("rightPanel");
+  const scoreValueEl = document.getElementById("scoreValue");
+  const leaderboardListEl = document.getElementById("leaderboardList");
+  const nextPreviewImgEl = document.getElementById("nextPreviewImg");
+  const nextPreviewWrapEl = document.getElementById("nextPreviewWrap");
+  const leaderboardScreenEl = document.getElementById("leaderboardScreen");
+  const leaderboardListModalEl = document.getElementById("leaderboardListModal");
+  const btnLeaderboard = document.getElementById("btnLeaderboard");
+  const btnLeaderboardClose = document.getElementById("btnLeaderboardClose");
+
+  function updateUiVisibility(){
+    settingsEl.classList.toggle("hidden", uiState !== "settings");
+    leaderboardScreenEl.classList.toggle("hidden", uiState !== "leaderboard");
+    btnInGameSettings.classList.toggle("hidden", uiState !== "playing");
+    leftPanelEl.classList.toggle("hidden", uiState !== "playing");
+    rightPanelEl.classList.toggle("hidden", uiState !== "playing");
+    CG.setPlaying(uiState === "playing" && !gameOver);
+  }
+
+  function updateNextPreview(){
+    const data = getSlimeData(launcher.queueLevel);
+    nextPreviewImgEl.src = getSlimeImage(launcher.queueLevel).src;
+    nextPreviewWrapEl.style.background = rgbToCss(hexToRgb(data.color), 0.18);
+  }
+
+  function syncSettingsUI(){
+    document.getElementById("vibrationToggle").checked = settings.vibrationOn;
+    refreshPlayGames();
+    soundToggleEl.checked = settings.soundOn;
+    volumeSliderEl.value = String(Math.round(settings.volume * 100));
+    volumeSliderEl.disabled = !settings.soundOn;
+  }
+
+  function openSettings(){
+    syncSettingsUI();
+    uiState = "settings";
+    updateUiVisibility();
+  }
+
+  btnInGameSettings.addEventListener("click", () => { ensureAudio(); openSettings(); });
+  btnSettingsClose.addEventListener("click", () => {
+    uiState = "playing";
+    updateUiVisibility();
+  });
+  btnLeaderboard.addEventListener("click", () => {
+    if (playGamesPlugin()) { openPlayGamesLeaderboard(); return; }
+    renderLeaderboardInto(leaderboardListModalEl);
+    uiState = "leaderboard";
+    updateUiVisibility();
+  });
+  btnLeaderboardClose.addEventListener("click", () => {
+    uiState = "playing";
+    updateUiVisibility();
+  });
+  soundToggleEl.addEventListener("change", () => {
+    settings.soundOn = soundToggleEl.checked;
+    volumeSliderEl.disabled = !settings.soundOn;
+    applyAudioSettings();
+    saveSettings();
+  });
+  volumeSliderEl.addEventListener("input", () => {
+    settings.volume = Number(volumeSliderEl.value) / 100;
+    applyAudioSettings();
+    saveSettings();
+  });
+
+  // ---------------------------------------------------------------------
+  // Boot
+  // ---------------------------------------------------------------------
+  resize();
+  prepareNextSlime();
+  applyLanguage(); // also renders the leaderboard
+  updateUiVisibility();
+  frameRequest = requestAnimationFrame(frame);
+
+  // No browser context menu (right-click / long-press on images).
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+  // iOS puts the AudioContext into "interrupted" after backgrounding and
+  // only lets it resume inside a touchend/click gesture.
+  for (const ev of ["touchend", "click"]){
+    document.addEventListener(ev, () => {
+      if (audioCtx && audioCtx.state !== "running") audioCtx.resume();
+    }, { passive: true });
+  }
+
+  // Reads every save once the SDK (and so the Data module) is ready.
+  function loadSaves(){
+    loadSettings();
+    leaderboard = loadLeaderboard();
+    tutorial.step = loadFlag(TUTORIAL_KEY) ? "done" : "aim";
+    tutorial.dangerHintDone = loadFlag(DANGER_HINT_KEY);
+  }
+
+  // =========================================================================
+  // Native Mobile App Integration (Capacitor)
+  // =========================================================================
+  function isNativeApp(){ return !!window.Capacitor?.isNativePlatform?.(); }
+  function playGamesPlugin(){
+    return isNativeApp() && window.Capacitor.getPlatform() === "android" ? window.Capacitor.Plugins.PlayGames : null;
+  }
+  let playGamesBusy = false;
+  function playGamesError(){ document.getElementById("playGamesStatus").textContent = t("playGamesError"); }
+  async function refreshPlayGames(){
+    const plugin = playGamesPlugin();
+    if (!plugin) return;
+    try {
+      const state = await plugin.getStatus();
+      document.getElementById("playGamesStatus").textContent = !state.configured ? t("playGamesSetup") : state.authenticated ? t("playGamesConnected", {name: state.displayName}) : t("playGamesOffline");
+      document.getElementById("btnPlayGamesSignIn").disabled = !state.configured || state.authenticated;
+      document.getElementById("btnPlayGamesLeaderboard").disabled = !state.configured;
+    } catch (_) { playGamesError(); }
+  }
+  async function submitPlayGamesScore(score){
+    const plugin = playGamesPlugin();
+    if (!plugin) return;
+    try {
+      const state = await plugin.getStatus();
+      if (state.authenticated) await plugin.submitScore({score});
+    } catch (_) { playGamesError(); }
+  }
+  async function openPlayGamesLeaderboard(){
+    const plugin = playGamesPlugin();
+    if (!plugin || playGamesBusy) return;
+    playGamesBusy = true;
+    const previous = uiState;
+    uiState = "leaderboard";
+    updateUiVisibility();
+    try {
+      const state = await plugin.getStatus();
+      if (!state.configured) { alert(t("playGamesSetup")); return; }
+      if (!state.authenticated) await plugin.signIn();
+      await plugin.showLeaderboard();
+    } catch (_) { alert(t("playGamesError")); }
+    finally { uiState = previous; updateUiVisibility(); playGamesBusy = false; }
+  }
+  document.getElementById("vibrationToggle").addEventListener("change", e => {
+    settings.vibrationOn = e.target.checked;
+    saveSettings();
+  });
+  document.getElementById("btnPlayGamesSignIn").addEventListener("click", async () => {
+    const button = document.getElementById("btnPlayGamesSignIn");
+    button.disabled = true;
+    try { await playGamesPlugin().signIn(); await refreshPlayGames(); }
+    catch (_) { button.disabled = false; playGamesError(); }
+  });
+  document.getElementById("btnPlayGamesAccount").addEventListener("click", () => playGamesPlugin().openAccountSettings().catch(playGamesError));
+  document.getElementById("btnPlayGamesLeaderboard").addEventListener("click", openPlayGamesLeaderboard);
+  function triggerHapticFeedback(level){
+    if (isNativeApp() && !settings.vibrationOn) return;
+    try {
+      if (window.Capacitor && window.Capacitor.isPluginAvailable && window.Capacitor.isPluginAvailable("Haptics")) {
+        const Haptics = window.Capacitor.Plugins.Haptics;
+        if (level >= 6) {
+          Haptics.impact({ style: "HEAVY" }).catch(() => {});
+        } else if (level >= 3) {
+          Haptics.impact({ style: "MEDIUM" }).catch(() => {});
+        } else {
+          Haptics.impact({ style: "LIGHT" }).catch(() => {});
+        }
+      } else if (navigator.vibrate) {
+        navigator.vibrate(level >= 6 ? 40 : 20);
+      }
+    } catch (_) {}
+  }
+
+  function initCapacitorApp() {
+    if (!isNativeApp()) return;
+    document.getElementById("vibrationRow").classList.remove("hidden");
+    if (playGamesPlugin()) {
+      document.getElementById("playGamesSettings").classList.remove("hidden");
+      refreshPlayGames();
+      btnLeaderboard.style.display = "inline-block";
+    }
+    const plugins = window.Capacitor.Plugins || {};
+    const { App, StatusBar, SplashScreen } = plugins;
+
+    if (SplashScreen && SplashScreen.hide) {
+      setTimeout(() => SplashScreen.hide().catch(() => {}), 300);
+    }
+
+    if (StatusBar && StatusBar.setOverlaysWebView) {
+      StatusBar.setOverlaysWebView({ overlay: true }).catch(() => {});
+    }
+
+    if (App && App.addListener) {
+      let resumeUiState = null;
+      App.addListener("appStateChange", ({isActive}) => {
+        if (!isActive) {
+          resumeUiState = uiState;
+          uiState = "nativePaused";
+          updateUiVisibility();
+        } else {
+          if (resumeUiState !== null) { uiState = resumeUiState; resumeUiState = null; updateUiVisibility(); }
+          refreshPlayGames();
+        }
+      });
+      App.addListener("backButton", () => {
+        if (privacyDialog.open) { privacyDialog.close(); return; }
+        if (uiState === "settings" || uiState === "leaderboard") {
+          uiState = "playing";
+          updateUiVisibility();
+        } else {
+          if (confirm("게임을 종료하시겠습니까?")) {
+            App.exitApp();
+          }
+        }
+      });
+    }
+  }
+
+  // CrazyGames: init the SDK, load saves, report loading until the page's
+  // images are in, then drop the player straight into a run.
+  const pageLoaded = document.readyState === "complete"
+    ? Promise.resolve()
+    : new Promise(r => window.addEventListener("load", r, { once: true }));
+  CG.ready
+    .then(() => { CG.loadingStart(); loadSaves(); return pageLoaded; })
+    .then(() => {
+      CG.loadingStop();
+      applyAudioSettings();
+      // Saved language + the SDK's user locale are only known now.
+      applyLanguage();
+      CG.onSettingsChange(applyAudioSettings);
+      restartGame();
+      uiState = "playing";
+      updateUiVisibility();
+      initCapacitorApp();
+    });
+})();
+</script>
+</body>
+</html>
